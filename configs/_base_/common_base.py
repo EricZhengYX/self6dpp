@@ -107,7 +107,7 @@ DATASETS = dict(
 # -----------------------------------------------------------------------------
 DATALOADER = dict(
     # Number of data loading threads
-    NUM_WORKERS=4,
+    NUM_WORKERS=0,
     MAX_OBJS_TRAIN=120,  # max number of objs per batch (used when load image-wise data and then flatten then batch)
     ASPECT_RATIO_GROUPING=False,  # default True in detectron2
     # Default sampler for dataloader

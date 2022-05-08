@@ -1,4 +1,4 @@
-_base_ = ["../../../_base_/gdrn_base.py"]
+_base_ = ["../_base_/gdrn_base.py"]
 
 OUTPUT_DIR = "output/gdrn/lm_pbr/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_DoubleMask_lm_pbr_100e/ape"
 INPUT = dict(
@@ -56,7 +56,7 @@ MODEL = dict(
     PIXEL_MEAN=[0.0, 0.0, 0.0],
     PIXEL_STD=[255.0, 255.0, 255.0],
     POSE_NET=dict(
-        NAME="GDRN_double_mask",
+        NAME="GDRN_double_mask_double_vf",
         XYZ_ONLINE=False,
         BACKBONE=dict(
             FREEZE=False,
@@ -69,14 +69,16 @@ MODEL = dict(
                 out_indices=(4,),
             ),
         ),
-        ## geo head: Mask, XYZ, Region
+        ## geo head: Mask, XYZ, Region, VF
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(
-                type="TopDownDoubleMaskXyzRegionHead",
+                type="TopDownDoubleMaskDoubleVFXyzRegionHead",
                 in_dim=2048,  # this is num out channels of backbone conv feature
             ),
             NUM_REGIONS=64,
+            VF_CLASS_AWARE=False,
+            NUM_CHANNAL_VF=16,
         ),
         PNP_NET=dict(
             INIT_CFG=dict(norm="GN", act="gelu"),
@@ -101,6 +103,10 @@ MODEL = dict(
             REGION_LOSS_TYPE="CE",  # CE
             REGION_LOSS_MASK_GT="visib",  # trunc | visib | obj
             REGION_LW=1.0,
+            # vf loss ---------------------------
+            VF_LOSS_TYPE='SmoothL1',
+            VIS_VF_LW=1.0,
+            FULL_VF_LW=1.0,
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM

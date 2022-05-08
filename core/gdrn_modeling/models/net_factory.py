@@ -22,6 +22,7 @@ from .heads.top_down_mask_xyz_region_head import TopDownMaskXyzRegionHead
 from .heads.top_down_doublemask_xyz_region_head import (
     TopDownDoubleMaskXyzRegionHead,
 )
+from .heads.top_down_doublemask_doublevf_xyz_region_head import TopDownDoubleMaskDoubleVFXyzRegionHead
 from .heads.conv_mask_xyz_region_head import ConvMaskXyzRegionHead
 from .heads.conv_pnp_net import ConvPnPNet
 from .heads.conv_pnp_net_no_region import ConvPnPNetNoRegion
@@ -70,8 +71,9 @@ NECKS = {"FPN": FPN}
 
 # -------------------------------------------------------------------------------
 HEADS = {
-    # mask-xyz-region
+    # mask-xyz-region-vf
     "TopDownDoubleMaskXyzRegionHead": TopDownDoubleMaskXyzRegionHead,
+    "TopDownDoubleMaskDoubleVFXyzRegionHead": TopDownDoubleMaskDoubleVFXyzRegionHead,
     "TopDownMaskXyzRegionHead": TopDownMaskXyzRegionHead,
     "ConvMaskXyzRegionHead": ConvMaskXyzRegionHead,
     "FPNMaskXyzRegionHead": FPNMaskXyzRegionHead,

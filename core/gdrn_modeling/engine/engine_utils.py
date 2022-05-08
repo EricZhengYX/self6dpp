@@ -4,7 +4,6 @@ import numpy as np
 import mmcv
 import itertools
 from einops import rearrange
-from lib.egl_renderer.egl_renderer_v3 import EGLRenderer
 from core.utils.camera_geometry import get_K_crop_resize
 from core.utils.data_utils import xyz_to_region_batch
 from lib.vis_utils.image import grid_show
@@ -54,6 +53,7 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
     for key in [
         "roi_xyz", "roi_xyz_bin",
         "roi_mask_trunc", "roi_mask_visib", "roi_mask_obj", "roi_mask_full",
+        "roi_vf_visib", "roi_vf_full",
         "roi_region",
         "ego_rot", "trans",
         "roi_points",
@@ -242,6 +242,7 @@ def batch_data_test(cfg, data, device="cuda"):
 
 
 def get_renderer(cfg, data_ref, obj_names, gpu_id=None):
+    from lib.egl_renderer.egl_renderer_v3 import EGLRenderer
     """for rendering the targets (xyz) online."""
     model_dir = data_ref.model_dir
 

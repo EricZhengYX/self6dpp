@@ -1,4 +1,4 @@
-_base_ = ["../../../../_base_/self6dpp_base.py"]
+_base_ = ["../../../_base_/self6dpp_base.py"]  # ["../../../../_base_/self6dpp_base.py"]
 
 OUTPUT_DIR = "output/self6dpp/ssLM/ss_v1_dibr_mlBCE_FreezeBN_woCenter_woDepth_refinePM10/ape"
 INPUT = dict(

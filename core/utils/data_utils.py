@@ -7,6 +7,7 @@ import time
 from detectron2.layers.roi_align import ROIAlign
 from torchvision.ops import RoIPool
 from scipy.spatial.distance import cdist
+from lib.pysixd.misc import project_pts
 
 
 def to_tensor(data):
@@ -279,6 +280,58 @@ def xyz_to_region(xyz_crop, fps_points):
     # (bh, bw)
     return mask_crop * region_ids  # 0 means bg
 
+
+def compute_vf(mask_full, mask_visib, fps_points, K, pose, normalized=True):  # 'vf' means vector field
+    """
+    Args:
+        mask_full: [h,w]
+        mask_visib: [h,w]
+        fps_points: [f,3]
+        K: [3, 3]
+        pose: [3, 4]
+        normalized: T/F
+    Returns:
+        vf_full, vf_visib: 2 x (h, w, f, 2) 1 to num_fps, 0 is bg
+    """
+    h, w = mask_full.shape
+    f, _ = fps_points.shape
+
+    rot, trans = pose[:3, :3], pose[:3, 3:]
+    pixel_ids = project_pts(fps_points, K, rot, trans)  # (f, 2)
+
+    hv, wv = np.meshgrid(np.linspace(0, w - 1, w), np.linspace(0, h - 1, h))
+    mesh = np.tile(np.dstack((hv, wv)).reshape(h, w, 1, 2), (1, 1, f, 1))  # (h, w, f, 2)
+    fps_pixel = np.tile(pixel_ids.reshape(1, 1, f, 2), (h, w, 1, 1))  # (h, w, f, 2)
+
+    vf = (mesh - fps_pixel)  # (h, w, f, 2)
+
+    if normalized:
+        vf = vf / np.linalg.norm(vf, axis=-1, keepdims=True)
+    else:
+        pass
+
+    vf_full = mask_full.reshape(h, w, 1, 1) * vf
+    vf_visib = mask_visib.reshape(h, w, 1, 1) * vf
+
+    return vf_full, vf_visib
+
+'''
+xyz_crop_tile = np.tile(xyz_crop.reshape(1, bh * bw, 3), (f, 1, 1))  # (f, bh * bw, 3)
+    fps_points_tile = np.tile(fps_points[:, None, :], (1, bh * bw, 1))  # (f, bh * bw, 3)
+    vector_3d = (xyz_crop_tile - fps_points_tile).reshape(f, bh, bw, 3)  # (f, bh, bw, 3)
+
+    if three_d:
+        vf = vector_3d
+    else:
+        vf = vector_3d[..., :2]
+
+    if normalized:
+        vf = vf / np.linalg.norm(vf, axis=-1, keepdims=True)
+    else:
+        pass
+
+    return mask_crop[None, ..., None] * vf
+'''
 
 def xyz_to_region_batch(xyz, fps_points, mask=None):
     """

@@ -38,6 +38,7 @@ from core.gdrn_modeling.models import (
     GDRN,
     GDRN_double_mask,
     GDRN_Dstream_double_mask,
+    GDRN_double_mask_double_vf,
 )  # noqa
 
 
@@ -148,8 +149,11 @@ def main(args):
         train_dset_meta = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
         data_ref = ref.__dict__[train_dset_meta.ref_key]
         train_obj_names = train_dset_meta.objs
-        render_gpu_id = comm.get_local_rank()
-        renderer = get_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+        if cfg.MODEL.POSE_NET.XYZ_ONLINE:
+            render_gpu_id = comm.get_local_rank()
+            renderer = get_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+        else:
+            renderer = None
 
     logger.info(f"Used GDRN module name: {cfg.MODEL.POSE_NET.NAME}")
     model, optimizer = eval(cfg.MODEL.POSE_NET.NAME).build_model_optimizer(cfg, is_test=args.eval_only)

@@ -10,7 +10,7 @@ import numpy as np
 import ref
 import torch
 from core.base_data_loader import Base_DatasetFromList
-from core.utils.data_utils import crop_resize_by_warp_affine, get_2d_coord_np, read_image_mmcv, xyz_to_region
+from core.utils.data_utils import crop_resize_by_warp_affine, get_2d_coord_np, read_image_mmcv, xyz_to_region, compute_vf
 from core.utils.dataset_utils import (
     filter_empty_dets,
     filter_invalid_in_dataset_dicts,
@@ -192,20 +192,21 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         else:
             return len(self._lst)
 
-    def _get_fps_points(self, dataset_name, with_center=False):
+    def _get_fps_points(self, dataset_name, num_fps_points, with_center=False):
         """convert to label based keys.
 
         # TODO: get models info similarly
         """
-        if dataset_name in self.fps_points:
-            return self.fps_points[dataset_name]
+        key_name = '{dsn}::{nfps}'.format(dsn=dataset_name, nfps=num_fps_points)
+        if key_name in self.fps_points:
+            return self.fps_points[key_name]
 
         dset_meta = MetadataCatalog.get(dataset_name)
         ref_key = dset_meta.ref_key
         data_ref = ref.__dict__[ref_key]
         objs = dset_meta.objs
         cfg = self.cfg
-        num_fps_points = cfg.MODEL.POSE_NET.GEO_HEAD.NUM_REGIONS
+        # num_fps_points = cfg.MODEL.POSE_NET.GEO_HEAD.NUM_REGIONS
         cur_fps_points = {}
         loaded_fps_points = data_ref.get_fps_points()
         for i, obj_name in enumerate(objs):
@@ -214,8 +215,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 cur_fps_points[i] = loaded_fps_points[str(obj_id)][f"fps{num_fps_points}_and_center"]
             else:
                 cur_fps_points[i] = loaded_fps_points[str(obj_id)][f"fps{num_fps_points}_and_center"][:-1]
-        self.fps_points[dataset_name] = cur_fps_points
-        return self.fps_points[dataset_name]
+        self.fps_points[key_name] = cur_fps_points
+        return self.fps_points[key_name]
 
     def _get_model_points(self, dataset_name):
         """convert to label based keys."""
@@ -537,7 +538,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
         # region label
         if g_head_cfg.NUM_REGIONS > 1:
-            fps_points = self._get_fps_points(dataset_name)[roi_cls]
+            fps_points = self._get_fps_points(dataset_name, g_head_cfg.NUM_REGIONS)[roi_cls]
             roi_region = xyz_to_region(roi_xyz, fps_points)  # HW
             dataset_dict["roi_region"] = torch.as_tensor(roi_region.astype(np.int32)).contiguous()
 
@@ -589,8 +590,43 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
         # pose targets ----------------------------------------------------------------------
         pose = inst_infos["pose"]
-        dataset_dict["ego_rot"] = torch.as_tensor(pose[:3, :3].astype("float32"))
-        dataset_dict["trans"] = torch.as_tensor(inst_infos["trans"].astype("float32"))
+        ego_rot = torch.as_tensor(pose[:3, :3].astype("float32"))
+        trans = torch.as_tensor(inst_infos["trans"].astype("float32"))
+
+        # vector field
+        if g_head_cfg.NUM_CHANNAL_VF > 1:
+            fps_points = self._get_fps_points(dataset_name, g_head_cfg.NUM_CHANNAL_VF)[roi_cls]
+            # roi_offset = bbox_center - scale / 2
+            vf_full, vf_visib = compute_vf(mask_full, mask_visib, fps_points, K, pose)  # f * H * W * 2
+            _h, _w, _f, _c = vf_full.shape
+
+            roi_vf_full = crop_resize_by_warp_affine(
+                vf_full.reshape(_h, _w, -1), bbox_center, scale, out_res, interpolation=mask_xyz_interp
+            ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)
+            roi_vf_visib = crop_resize_by_warp_affine(
+                vf_visib.reshape(_h, _w, -1), bbox_center, scale, out_res, interpolation=mask_xyz_interp
+            ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)
+
+            dataset_dict["roi_vf_full"] = torch.as_tensor(roi_vf_full.astype(np.float)).contiguous()
+            dataset_dict["roi_vf_visib"] = torch.as_tensor(roi_vf_visib.astype(np.float)).contiguous()
+            '''
+            img = read_image_mmcv(dataset_dict["file_name"], format=self.img_format)
+            iimg=crop_resize_by_warp_affine(
+                img, bbox_center, scale, input_res, interpolation=cv2.INTER_LINEAR
+            )
+            i = 1
+            plt.figure()
+            plt.subplot(1,3,1)
+            plt.imshow(roi_vf_visib[2 * i + 0, ...])
+            plt.subplot(1,3,2)
+            plt.imshow(roi_vf_visib[2 * i + 1, ...])
+            plt.subplot(1,3,3)
+            plt.imshow(iimg)
+            plt.show()
+            '''
+
+        dataset_dict["ego_rot"] = ego_rot
+        dataset_dict["trans"] = trans
 
         dataset_dict["roi_points"] = torch.as_tensor(self._get_model_points(dataset_name)[roi_cls].astype("float32"))
         dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
