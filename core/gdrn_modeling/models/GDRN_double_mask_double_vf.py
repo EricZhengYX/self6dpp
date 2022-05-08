@@ -487,7 +487,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
 
         # region vf loss ----------------------------------
         if not g_head_cfg.FREEZE:
-            vf_loss_type = loss_cfg.VFLOSS_TYPE
+            vf_loss_type = loss_cfg.VF_LOSS_TYPE
             if gt_vf_visib is not None and out_vf_vis is not None:
                 if vf_loss_type == "L1":
                     loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
