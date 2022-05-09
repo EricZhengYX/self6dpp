@@ -36,19 +36,20 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
             device=device, non_blocking=True
         )
 
-    batch["roi_cam"] = torch.stack([d["cam"] for d in data], dim=0).to(device, non_blocking=True)
-    batch["roi_center"] = torch.stack([d["bbox_center"] for d in data], dim=0).to(
-        device=device, dtype=torch.float32, non_blocking=True
-    )
-    batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(device, non_blocking=True)
-    batch["resize_ratio"] = torch.tensor([d["resize_ratio"] for d in data]).to(
-        device=device, dtype=torch.float32, non_blocking=True
-    )
-    batch["roi_extent"] = torch.stack([d["roi_extent"] for d in data], dim=0).to(
-        device=device, dtype=torch.float32, non_blocking=True
-    )
+    if all([d["mode"] == 'pose' for d in data]):  # not needed for geo-mode
+        batch["roi_cam"] = torch.stack([d["cam"] for d in data], dim=0).to(device, non_blocking=True)
+        batch["roi_center"] = torch.stack([d["bbox_center"] for d in data], dim=0).to(
+            device=device, dtype=torch.float32, non_blocking=True
+        )
+        batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(device, non_blocking=True)
+        batch["resize_ratio"] = torch.tensor([d["resize_ratio"] for d in data]).to(
+            device=device, dtype=torch.float32, non_blocking=True
+        )
+        batch["roi_extent"] = torch.stack([d["roi_extent"] for d in data], dim=0).to(
+            device=device, dtype=torch.float32, non_blocking=True
+        )
 
-    batch["roi_trans_ratio"] = torch.stack([d["trans_ratio"] for d in data], dim=0).to(device, non_blocking=True)
+        batch["roi_trans_ratio"] = torch.stack([d["trans_ratio"] for d in data], dim=0).to(device, non_blocking=True)
     # yapf: disable
     for key in [
         "roi_xyz", "roi_xyz_bin",

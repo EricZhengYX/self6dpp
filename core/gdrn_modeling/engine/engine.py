@@ -279,10 +279,15 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
             epoch = iteration // iters_per_epoch + 1  # epoch start from 1
             storage.put_scalar("epoch", epoch, smoothing_hint=False)
 
+            this_iter_data_mode = ''  # 'pose' | 'geo'
             if np.random.rand() < train_2_ratio:
+                data_loader_2.dataset.step()
                 data = next(data_loader_2_iter)
+                this_iter_data_mode = data_loader_2.dataset.get_current_output_mode()
             else:
+                data_loader.dataset.step()
                 data = next(data_loader_iter)
+                this_iter_data_mode = data_loader.dataset.get_current_output_mode()
 
             if iter_time is not None:
                 storage.put_scalar("time", time.perf_counter() - iter_time)
@@ -302,27 +307,28 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     inp,
                     gt_xyz=batch.get("roi_xyz", None),
                     gt_xyz_bin=batch.get("roi_xyz_bin", None),
-                    gt_mask_trunc=batch["roi_mask_trunc"],
-                    gt_mask_visib=batch["roi_mask_visib"],
+                    gt_mask_trunc=batch.get("roi_mask_trunc", None),
+                    gt_mask_visib=batch.get("roi_mask_visib", None),
                     gt_mask_full=batch.get("roi_mask_full", None),
-                    gt_mask_obj=batch["roi_mask_obj"],
+                    gt_mask_obj=batch.get("roi_mask_obj", None),
                     gt_vf_visib=batch.get("roi_vf_visib", None),
                     gt_vf_full=batch.get("roi_vf_full", None),
                     gt_region=batch.get("roi_region", None),
                     gt_ego_rot=batch.get("ego_rot", None),
                     gt_trans=batch.get("trans", None),
-                    gt_trans_ratio=batch["roi_trans_ratio"],
+                    gt_trans_ratio=batch.get("roi_trans_ratio", None),
                     gt_points=batch.get("roi_points", None),
                     sym_infos=batch.get("sym_info", None),
-                    roi_classes=batch["roi_cls"],
-                    roi_cams=batch["roi_cam"],
-                    roi_whs=batch["roi_wh"],
-                    roi_centers=batch["roi_center"],
-                    resize_ratios=batch["resize_ratio"],
+                    roi_classes=batch.get("roi_cls", None),
+                    roi_cams=batch.get("roi_cam", None),
+                    roi_whs=batch.get("roi_wh", None),
+                    roi_centers=batch.get("roi_center", None),
+                    resize_ratios=batch.get("resize_ratio", None),
                     roi_coord_2d=batch.get("roi_coord_2d", None),
                     roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
                     roi_extents=batch.get("roi_extent", None),
                     do_loss=True,
+                    loss_mode=this_iter_data_mode,
                 )
                 losses = sum(loss_dict.values())
                 assert torch.isfinite(losses).all(), loss_dict

@@ -9,6 +9,8 @@ import mmcv
 import numpy as np
 import ref
 import torch
+from imgaug import seed as iaseed
+import imgaug.augmenters as iaa
 from core.base_data_loader import Base_DatasetFromList
 from core.utils.data_utils import crop_resize_by_warp_affine, get_2d_coord_np, read_image_mmcv, xyz_to_region, compute_vf
 from core.utils.dataset_utils import (
@@ -30,6 +32,7 @@ from detectron2.structures import BoxMode
 from detectron2.utils.logger import log_first_n
 from lib.pysixd import inout, misc
 from lib.utils.mask_utils import cocosegm2mask, get_edge
+from lib.utils.aug_utils import RandomZoom
 from lib.vis_utils.image import grid_show
 from .dataset_factory import register_datasets
 from .data_loader_online import GDRN_Online_DatasetFromList
@@ -90,6 +93,33 @@ def transform_instance_annotations(annotation, transforms, image_size, *, keypoi
     return annotation
 
 
+def build_gdrn_augmentation_pose_variated(cfg) -> iaa.Sequential:
+    """Create a list of :class:`Augmentation` from config.
+
+    Returns:
+        list[Augmentation]
+    """
+    aug_cfg = cfg.INPUT.POSE_VARIATED_AUG
+    rot_deg = aug_cfg.ROT.MAX_DEGREE // 2
+    sl, su = aug_cfg.ZOOM.LOWER_LIM, aug_cfg.ZOOM.UPPER_LIM
+    tl, tu = aug_cfg.TRANS.LOWER_LIM, aug_cfg.TRANS.UPPER_LIM
+    crop_percent = aug_cfg.CROP.PERCENT
+    seq = iaa.Sequential([
+        iaa.CropAndPad(
+            percent=(-crop_percent, crop_percent),
+            sample_independently=False,
+            pad_mode="constant",
+        ),
+        iaa.Affine(
+            scale={"x": (sl, su), "y": (sl, su)},
+            translate_percent={"x": (tl, tu), "y": (tl, tu)},
+            rotate=(-rot_deg, rot_deg),
+        )
+    ], random_order=True)
+
+    return seq
+
+
 def build_gdrn_augmentation(cfg, is_train):
     """Create a list of :class:`Augmentation` from config. when training 6d
     pose, cannot flip.
@@ -136,6 +166,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 process instead of making a copy.
         """
         self.augmentation = build_gdrn_augmentation(cfg, is_train=(split == "train"))
+        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg)
         if cfg.INPUT.COLOR_AUG_PROB > 0 and cfg.INPUT.COLOR_AUG_TYPE.lower() == "ssd":
             self.augmentation.append(ColorAugSSDTransform(img_format=cfg.INPUT.FORMAT))
             logging.getLogger(__name__).info("Color augmentation used in training: " + str(self.augmentation[-1]))
@@ -173,6 +204,10 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         # ----------------------------------------------------
         self._copy = copy
         self._serialize = serialize
+
+        # output mode: pose | geo
+        self.__geo_mode_prob = cfg.INPUT.POSE_VARIATED_AUG.get('OVERALL_PROB', 0)
+        self.__output_mode = 'pose'
 
         def _serialize(data):
             buffer = pickle.dumps(data, protocol=-1)
@@ -434,7 +469,6 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
         # extent
         roi_extent = self._get_extents(dataset_name)[roi_cls]
-        dataset_dict["roi_extent"] = torch.tensor(roi_extent, dtype=torch.float32)
 
         # load xyz =======================================================
         xyz_info = mmcv.load(inst_infos["xyz_path"])
@@ -533,14 +567,13 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 mask_full[:, :, None], bbox_center, scale, out_res, interpolation=mask_xyz_interp
             )
 
-        ## roi_xyz ----------------------------------------------------
+        # roi_xyz ----------------------------------------------------
         roi_xyz = crop_resize_by_warp_affine(xyz, bbox_center, scale, out_res, interpolation=mask_xyz_interp)
 
-        # region label
+        # roi_region label
         if g_head_cfg.NUM_REGIONS > 1:
             fps_points = self._get_fps_points(dataset_name, g_head_cfg.NUM_REGIONS)[roi_cls]
             roi_region = xyz_to_region(roi_xyz, fps_points)  # HW
-            dataset_dict["roi_region"] = torch.as_tensor(roi_region.astype(np.int32)).contiguous()
 
         roi_xyz = roi_xyz.transpose(2, 0, 1)  # HWC-->CHW
         # normalize xyz to [0, 1] using extent
@@ -583,10 +616,11 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
             if "CE" in xyz_loss_type:
                 dataset_dict["roi_xyz_bin"] = torch.as_tensor(roi_xyz_bin.astype("uint8")).contiguous()
-            if "/" in xyz_loss_type and len(xyz_loss_type.split("/")[1]) > 0:
-                dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
+            # if "/" in xyz_loss_type and len(xyz_loss_type.split("/")[1]) > 0:
+            #     dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
         else:
-            dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
+            pass
+            # dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
 
         # pose targets ----------------------------------------------------------------------
         pose = inst_infos["pose"]
@@ -606,9 +640,6 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             roi_vf_visib = crop_resize_by_warp_affine(
                 vf_visib.reshape(_h, _w, -1), bbox_center, scale, out_res, interpolation=mask_xyz_interp
             ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)
-
-            dataset_dict["roi_vf_full"] = torch.as_tensor(roi_vf_full.astype(np.float)).contiguous()
-            dataset_dict["roi_vf_visib"] = torch.as_tensor(roi_vf_visib.astype(np.float)).contiguous()
             '''
             img = read_image_mmcv(dataset_dict["file_name"], format=self.img_format)
             iimg=crop_resize_by_warp_affine(
@@ -625,35 +656,91 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             plt.show()
             '''
 
-        dataset_dict["ego_rot"] = ego_rot
-        dataset_dict["trans"] = trans
+        if self.__output_mode == 'geo':
+            '''
+            making 'pose-variated data augmentations', for following nparrays:
+            'roi_img'
+            'roi_region'
+            'roi_xyz'
+            'roi_vf_full'
+            'roi_vf_visib'
+            'roi_coord_2d' (?)
+            'roi_mask_trunc'
+            'roi_mask_visib'
+            'roi_mask_obj'
+            'roi_mask_full'
+            '''
+            dataset_dict["mode"] = "geo"
+            fix_seed = np.random.randint(0, 2022)
 
-        dataset_dict["roi_points"] = torch.as_tensor(self._get_model_points(dataset_name)[roi_cls].astype("float32"))
-        dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
+            def _make_aug(m: np.ndarray, npdtype=np.float32) -> torch.Tensor:
+                iaseed(fix_seed)
+                if m.ndim == 3:
+                    m_aug = self.augmentation_pose_variated(image=m.transpose((1, 2, 0))).astype(npdtype)
+                    return torch.as_tensor(m_aug.transpose((2, 0, 1))).contiguous()
+                elif m.ndim == 2:
+                    m_aug = self.augmentation_pose_variated(image=m[..., None]).astype(npdtype)
+                    return torch.as_tensor(m_aug[..., 0]).contiguous()
+                else:
+                    raise TypeError('Wrong shape: {}'.format(m.shape))
 
-        dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()
-        if self.with_depth:
-            dataset_dict["roi_depth"] = torch.as_tensor(roi_depth.astype("float32")).contiguous()
+            dataset_dict["roi_img"] = _make_aug(roi_img)
+            dataset_dict["roi_xyz"] = _make_aug(roi_xyz)
+            if self.with_depth:
+                dataset_dict["roi_depth"] = _make_aug(roi_depth)
+            if g_head_cfg.NUM_REGIONS > 1:
+                dataset_dict["roi_region"] = _make_aug(roi_region, np.int32)
+            if g_head_cfg.NUM_CHANNAL_VF > 1:
+                dataset_dict["roi_vf_full"] = _make_aug(roi_vf_full)
+                dataset_dict["roi_vf_visib"] = _make_aug(roi_vf_visib)
+            dataset_dict["roi_mask_trunc"] = _make_aug(roi_mask_trunc)
+            dataset_dict["roi_mask_visib"] = _make_aug(roi_mask_visib)
+            dataset_dict["roi_mask_obj"] = _make_aug(roi_mask_obj)
+            if "mask_full" in anno.keys():
+                dataset_dict["roi_mask_full"] = _make_aug(roi_mask_full)
+            return dataset_dict
+        elif self.__output_mode == 'pose':
+            dataset_dict["mode"] = "pose"
 
-        dataset_dict["roi_coord_2d"] = torch.as_tensor(roi_coord_2d.astype("float32")).contiguous()
-        dataset_dict["roi_coord_2d_rel"] = torch.as_tensor(roi_coord_2d_rel.astype("float32")).contiguous()
+            dataset_dict["ego_rot"] = ego_rot
+            dataset_dict["trans"] = trans
 
-        dataset_dict["roi_mask_trunc"] = torch.as_tensor(roi_mask_trunc.astype("float32")).contiguous()
-        dataset_dict["roi_mask_visib"] = torch.as_tensor(roi_mask_visib.astype("float32")).contiguous()
-        dataset_dict["roi_mask_obj"] = torch.as_tensor(roi_mask_obj.astype("float32")).contiguous()
-        if "mask_full" in anno.keys():
-            dataset_dict["roi_mask_full"] = torch.as_tensor(roi_mask_full.astype("float32")).contiguous()
+            dataset_dict["roi_points"] = torch.as_tensor(self._get_model_points(dataset_name)[roi_cls].astype("float32"))
+            dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
 
-        dataset_dict["bbox_center"] = torch.as_tensor(bbox_center, dtype=torch.float32)
-        dataset_dict["scale"] = scale
-        dataset_dict["bbox"] = anno["bbox"]  # NOTE: original bbox
-        dataset_dict["roi_wh"] = torch.as_tensor(np.array([bw, bh], dtype=np.float32))
-        dataset_dict["resize_ratio"] = resize_ratio = out_res / scale
-        z_ratio = inst_infos["trans"][2] / resize_ratio
-        obj_center = anno["centroid_2d"]
-        delta_c = obj_center - bbox_center
-        dataset_dict["trans_ratio"] = torch.as_tensor([delta_c[0] / bw, delta_c[1] / bh, z_ratio]).to(torch.float32)
-        return dataset_dict
+            dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()
+            if self.with_depth:
+                dataset_dict["roi_depth"] = torch.as_tensor(roi_depth.astype("float32")).contiguous()
+            if g_head_cfg.NUM_REGIONS > 1:
+                dataset_dict["roi_region"] = torch.as_tensor(roi_region.astype(np.int32)).contiguous()
+            if g_head_cfg.NUM_CHANNAL_VF > 1:
+                dataset_dict["roi_vf_full"] = torch.as_tensor(roi_vf_full.astype(np.float)).contiguous()
+                dataset_dict["roi_vf_visib"] = torch.as_tensor(roi_vf_visib.astype(np.float)).contiguous()
+
+            dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
+
+            dataset_dict["roi_coord_2d"] = torch.as_tensor(roi_coord_2d.astype("float32")).contiguous()
+            dataset_dict["roi_coord_2d_rel"] = torch.as_tensor(roi_coord_2d_rel.astype("float32")).contiguous()
+
+            dataset_dict["roi_mask_trunc"] = torch.as_tensor(roi_mask_trunc.astype("float32")).contiguous()
+            dataset_dict["roi_mask_visib"] = torch.as_tensor(roi_mask_visib.astype("float32")).contiguous()
+            dataset_dict["roi_mask_obj"] = torch.as_tensor(roi_mask_obj.astype("float32")).contiguous()
+            if "mask_full" in anno.keys():
+                dataset_dict["roi_mask_full"] = torch.as_tensor(roi_mask_full.astype("float32")).contiguous()
+
+            dataset_dict["bbox_center"] = torch.as_tensor(bbox_center, dtype=torch.float32)
+            dataset_dict["scale"] = scale
+            dataset_dict["bbox"] = anno["bbox"]  # NOTE: original bbox
+            dataset_dict["roi_wh"] = torch.as_tensor(np.array([bw, bh], dtype=np.float32))
+            dataset_dict["roi_extent"] = torch.tensor(roi_extent, dtype=torch.float32)
+            dataset_dict["resize_ratio"] = resize_ratio = out_res / scale
+            z_ratio = inst_infos["trans"][2] / resize_ratio
+            obj_center = anno["centroid_2d"]
+            delta_c = obj_center - bbox_center
+            dataset_dict["trans_ratio"] = torch.as_tensor([delta_c[0] / bw, delta_c[1] / bh, z_ratio]).to(torch.float32)
+            return dataset_dict
+        else:
+            raise ValueError('Unknown output mode: {}'.format(self.__output_mode))
 
     def read_data_test(self, dataset_dict):
         """load image and annos random shift & scale bbox; crop, rescale."""
@@ -830,6 +917,31 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         edges = get_edge(xyz)
         xyz[edges != 0] = xyz_blur[edges != 0]
         return xyz
+
+    def get_current_output_mode(self):
+        return self.__output_mode
+
+    '''
+    def __switch_output_mode(self):
+        if self.__output_mode == 'fix':
+            return -1
+        elif self.__output_mode == 'pose':
+            self.__output_mode = 'geo'
+            return 0
+        elif self.__output_mode == 'geo':
+            self.__output_mode = 'pose'
+            return 0
+        else:
+            raise ValueError(self.__output_mode)
+    '''
+
+    def step(self):
+        # switch output mode btw {'pose', 'geo'}
+        assert self.split == 'train', self.split
+        if np.random.rand() < self.__geo_mode_prob:
+            self.__output_mode = 'geo'
+        else:
+            self.__output_mode = 'pose'
 
     def __getitem__(self, idx):
         if self.split != "train":

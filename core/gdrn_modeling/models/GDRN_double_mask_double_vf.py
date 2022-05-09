@@ -95,6 +95,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         roi_extents=None,
         resize_ratios=None,
         do_loss=False,
+        loss_mode='geo',
     ):
         cfg = self.cfg
         net_cfg = cfg.MODEL.POSE_NET
@@ -120,7 +121,36 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             coor_z,
             region,
         ) = self.geo_head_net(conv_feat)
+        if do_loss and loss_mode == 'geo':
+            # return in advance, training in geo mode
+            out_dict = {}
+            loss_dict = self.geo_loss(
+                cfg=cfg,
+                # mask
+                out_mask_vis=vis_mask,
+                out_mask_full=full_mask,
+                gt_mask_trunc=gt_mask_trunc,
+                gt_mask_visib=gt_mask_visib,
+                gt_mask_obj=gt_mask_obj,
+                gt_mask_full=gt_mask_full,
+                # vf
+                out_vf_vis=vis_vf,
+                out_vf_full=full_vf,
+                gt_vf_visib=gt_vf_visib,
+                gt_vf_full=gt_vf_full,
+                # xyz
+                out_x=coor_x,
+                out_y=coor_y,
+                out_z=coor_z,
+                gt_xyz=gt_xyz,
+                gt_xyz_bin=gt_xyz_bin,
+                # roi region
+                out_region=region,
+                gt_region=gt_region,
+            )
+            return out_dict, loss_dict
 
+        # region predicting R/T
         if g_head_cfg.XYZ_CLASS_AWARE:
             assert roi_classes is not None
             coor_x = coor_x.view(
@@ -235,6 +265,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             )
         else:
             raise ValueError(f"Unknown trans type: {pnp_net_cfg.TRANS_TYPE}")
+        # endregion
 
         if not do_loss:  # test
             out_dict = {"rot": pred_ego_rot, "trans": pred_trans}
@@ -708,6 +739,213 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     f"Unknown bind loss (R^T@t) type: {loss_cfg.BIND_LOSS_TYPE}"
                 )
             loss_dict["loss_bind"] *= loss_cfg.BIND_LW
+        # endregion
+
+        if net_cfg.USE_MTL:
+            for _k in loss_dict:
+                _name = _k.replace("loss_", "log_var_")
+                cur_log_var = getattr(self, _name)
+                loss_dict[_k] = loss_dict[_k] * torch.exp(-cur_log_var) + torch.log(
+                    1 + torch.exp(cur_log_var)
+                )
+        return loss_dict
+
+    def geo_loss(
+            self,
+            cfg,
+            # mask
+            out_mask_vis,
+            out_mask_full,
+            gt_mask_trunc,
+            gt_mask_visib,
+            gt_mask_obj,
+            gt_mask_full,
+            # vector field
+            out_vf_vis,
+            out_vf_full,
+            gt_vf_visib,
+            gt_vf_full,
+            # xyz
+            out_x,
+            out_y,
+            out_z,
+            gt_xyz,
+            gt_xyz_bin,
+            # roi region
+            out_region,
+            gt_region,
+    ):
+        net_cfg = cfg.MODEL.POSE_NET
+        g_head_cfg = net_cfg.GEO_HEAD
+        loss_cfg = net_cfg.LOSS_CFG
+
+        loss_dict = {}
+
+        gt_masks = {
+            "trunc": gt_mask_trunc,
+            "visib": gt_mask_visib,
+            "obj": gt_mask_obj,
+            "full": gt_mask_full,
+        }
+
+        # region xyz loss ----------------------------------
+        if not g_head_cfg.FREEZE:
+            xyz_loss_type = loss_cfg.XYZ_LOSS_TYPE
+            gt_mask_xyz = gt_masks[loss_cfg.XYZ_LOSS_MASK_GT]
+            if xyz_loss_type == "L1":
+                loss_func = nn.L1Loss(reduction="sum")
+                loss_dict["loss_coor_x"] = loss_func(
+                    out_x * gt_mask_xyz[:, None], gt_xyz[:, 0:1] * gt_mask_xyz[:, None]
+                ) / gt_mask_xyz.sum().float().clamp(min=1.0)
+                loss_dict["loss_coor_y"] = loss_func(
+                    out_y * gt_mask_xyz[:, None], gt_xyz[:, 1:2] * gt_mask_xyz[:, None]
+                ) / gt_mask_xyz.sum().float().clamp(min=1.0)
+                loss_dict["loss_coor_z"] = loss_func(
+                    out_z * gt_mask_xyz[:, None], gt_xyz[:, 2:3] * gt_mask_xyz[:, None]
+                ) / gt_mask_xyz.sum().float().clamp(min=1.0)
+            elif xyz_loss_type == "CE_coor":
+                gt_xyz_bin = gt_xyz_bin.long()
+                loss_func = CrossEntropyHeatmapLoss(
+                    reduction="sum", weight=None
+                )  # g_head_cfg.XYZ_BIN+1
+                loss_dict["loss_coor_x"] = loss_func(
+                    out_x * gt_mask_xyz[:, None], gt_xyz_bin[:, 0] * gt_mask_xyz.long()
+                ) / gt_mask_xyz.sum().float().clamp(min=1.0)
+                loss_dict["loss_coor_y"] = loss_func(
+                    out_y * gt_mask_xyz[:, None], gt_xyz_bin[:, 1] * gt_mask_xyz.long()
+                ) / gt_mask_xyz.sum().float().clamp(min=1.0)
+                loss_dict["loss_coor_z"] = loss_func(
+                    out_z * gt_mask_xyz[:, None], gt_xyz_bin[:, 2] * gt_mask_xyz.long()
+                ) / gt_mask_xyz.sum().float().clamp(min=1.0)
+            else:
+                raise NotImplementedError(f"unknown xyz loss type: {xyz_loss_type}")
+            loss_dict["loss_coor_x"] *= loss_cfg.XYZ_LW
+            loss_dict["loss_coor_y"] *= loss_cfg.XYZ_LW
+            loss_dict["loss_coor_z"] *= loss_cfg.XYZ_LW
+        # endregion
+
+        # region mask loss ----------------------------------
+        if not g_head_cfg.FREEZE:
+            mask_loss_type = loss_cfg.MASK_LOSS_TYPE
+            gt_mask = gt_masks[loss_cfg.MASK_LOSS_GT]
+            if mask_loss_type == "L1":
+                loss_dict["loss_mask"] = nn.L1Loss(reduction="mean")(
+                    out_mask_vis[:, 0, :, :], gt_mask
+                )
+            elif mask_loss_type == "BCE":
+                loss_dict["loss_mask"] = nn.BCEWithLogitsLoss(reduction="mean")(
+                    out_mask_vis[:, 0, :, :], gt_mask
+                )
+            elif mask_loss_type == "RW_BCE":
+                loss_dict["loss_mask"] = weighted_ex_loss_probs(
+                    torch.sigmoid(out_mask_vis[:, 0, :, :]), gt_mask, weight=None
+                )
+            elif mask_loss_type == "dice":
+                loss_dict["loss_mask"] = soft_dice_loss(
+                    torch.sigmoid(out_mask_vis[:, 0, :, :]),
+                    gt_mask,
+                    eps=0.002,
+                    reduction="mean",
+                )
+            elif mask_loss_type == "CE":
+                loss_dict["loss_mask"] = nn.CrossEntropyLoss(reduction="mean")(
+                    out_mask_vis, gt_mask.long()
+                )
+            else:
+                raise NotImplementedError(f"unknown mask loss type: {mask_loss_type}")
+            loss_dict["loss_mask"] *= loss_cfg.MASK_LW
+
+        if not g_head_cfg.FREEZE and loss_cfg.FULL_MASK_LW > 0:
+            mask_loss_type = loss_cfg.MASK_LOSS_TYPE
+            assert gt_mask_full is not None
+            full_mask_loss_type = loss_cfg.FULL_MASK_LOSS_TYPE
+            if full_mask_loss_type == "L1":
+                loss_dict["loss_mask_full"] = nn.L1Loss(reduction="mean")(
+                    out_mask_full[:, 0, :, :], gt_mask_full
+                )
+            elif full_mask_loss_type == "BCE":
+                loss_dict["loss_mask_full"] = nn.BCEWithLogitsLoss(reduction="mean")(
+                    out_mask_full[:, 0, :, :], gt_mask_full
+                )
+            elif full_mask_loss_type == "RW_BCE":
+                loss_dict["loss_mask_full"] = weighted_ex_loss_probs(
+                    torch.sigmoid(out_mask_full[:, 0, :, :]), gt_mask_full, weight=None
+                )
+            elif full_mask_loss_type == "dice":
+                loss_dict["loss_mask_full"] = soft_dice_loss(
+                    torch.sigmoid(out_mask_full[:, 0, :, :]),
+                    gt_mask_full,
+                    eps=0.002,
+                    reduction="mean",
+                )
+            elif full_mask_loss_type == "CE":
+                loss_dict["loss_mask_full"] = nn.CrossEntropyLoss(reduction="mean")(
+                    out_mask_full, gt_mask_full.long()
+                )
+            else:
+                raise NotImplementedError(f"unknown mask loss type: {mask_loss_type}")
+            loss_dict["loss_mask_full"] *= loss_cfg.FULL_MASK_LW
+        # endregion
+
+        # region vf loss ----------------------------------
+        if not g_head_cfg.FREEZE:
+            vf_loss_type = loss_cfg.VF_LOSS_TYPE
+            if gt_vf_visib is not None and out_vf_vis is not None:
+                if vf_loss_type == "L1":
+                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
+                        out_vf_vis, gt_vf_visib
+                    )
+                elif vf_loss_type == "L2" or vf_loss_type == "MSE":
+                    loss_dict["loss_vf_vis"] = nn.MSELoss(reduction="mean")(
+                        out_vf_vis, gt_vf_visib
+                    )
+                elif vf_loss_type == "SmoothL1":
+                    loss_dict["loss_vf_vis"] = nn.SmoothL1Loss(reduction="mean")(
+                        out_vf_vis, gt_vf_visib
+                    )
+                else:
+                    raise ValueError(vf_loss_type)
+            loss_dict["loss_vf_vis"] *= loss_cfg.VIS_VF_LW
+
+            if gt_vf_full is not None and out_vf_full is not None:
+                if vf_loss_type == "L1":
+                    loss_dict["loss_vf_full"] = nn.L1Loss(reduction="mean")(
+                        out_vf_full, gt_vf_full
+                    )
+                elif vf_loss_type == "L2" or vf_loss_type == "MSE":
+                    loss_dict["loss_vf_full"] = nn.MSELoss(reduction="mean")(
+                        out_vf_full, gt_vf_full
+                    )
+                elif vf_loss_type == "SmoothL1":
+                    loss_dict["loss_vf_full"] = nn.SmoothL1Loss(reduction="mean")(
+                        out_vf_full, gt_vf_full
+                    )
+                else:
+                    raise ValueError(vf_loss_type)
+            loss_dict["loss_vf_full"] *= loss_cfg.FULL_VF_LW
+        # endregion
+
+        # region roi region loss --------------------
+        if not g_head_cfg.FREEZE:
+            region_loss_type = loss_cfg.REGION_LOSS_TYPE
+            gt_mask_region = gt_masks[loss_cfg.REGION_LOSS_MASK_GT]
+            if region_loss_type == "CE":
+                gt_region = gt_region.long()
+                loss_func = nn.CrossEntropyLoss(
+                    reduction="sum", weight=None
+                )  # g_head_cfg.XYZ_BIN+1
+                loss_dict["loss_region"] = (
+                        loss_func(
+                            out_region * gt_mask_region[:, None],
+                            gt_region * gt_mask_region.long(),
+                        )
+                        / gt_mask_region.sum().float().clamp(min=1.0)
+                )
+            else:
+                raise NotImplementedError(
+                    f"unknown region loss type: {region_loss_type}"
+                )
+            loss_dict["loss_region"] *= loss_cfg.REGION_LW
         # endregion
 
         if net_cfg.USE_MTL:

@@ -57,3 +57,4 @@ events.out.tfevents*
 
 external/kaolin-0.1
 *debug*
+/tmp/

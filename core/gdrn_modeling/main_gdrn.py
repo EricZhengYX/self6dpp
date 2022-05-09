@@ -6,6 +6,9 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"
 import os.path as osp
 import sys
 from setproctitle import setproctitle
+import numpy as np
+np.set_string_function(lambda x: "{s} @ {dt}".format(s=x.shape, dt=x.dtype))
+
 import torch
 from torch.nn.parallel import DistributedDataParallel
 

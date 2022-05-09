@@ -276,7 +276,7 @@ def xyz_to_region(xyz_crop, fps_points):
     bh, bw = xyz_crop.shape[:2]
     mask_crop = ((xyz_crop[:, :, 0] != 0) | (xyz_crop[:, :, 1] != 0) | (xyz_crop[:, :, 2] != 0)).astype("uint8")
     dists = cdist(xyz_crop.reshape(bh * bw, 3), fps_points)  # (hw, f)
-    region_ids = np.argmin(dists, axis=1).reshape(bh, bw) + 1  # NOTE: 1 to num_fps
+    region_ids = np.argmin(dists, axis=1).reshape(bh, bw).astype("uint8") + 1  # NOTE: 1 to num_fps
     # (bh, bw)
     return mask_crop * region_ids  # 0 means bg
 

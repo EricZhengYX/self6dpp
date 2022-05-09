@@ -4,7 +4,7 @@ OUTPUT_DIR = "output/gdrn/lm_pbr/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_DoubleM
 INPUT = dict(
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
-    CHANGE_BG_PROB=0.5,  # 0.5
+    CHANGE_BG_PROB=0.,  # 0.5
     COLOR_AUG_PROB=0.8,
     COLOR_AUG_TYPE="code",
     COLOR_AUG_CODE=(
@@ -28,10 +28,27 @@ INPUT = dict(
         "], random_order=True)"
         # cosy+aae
     ),
+    POSE_VARIATED_AUG=dict(
+        OVERALL_PROB=0.3,
+        CROP=dict(
+            PERCENT=0.1
+        ),
+        ROT=dict(
+            MAX_DEGREE=360,
+        ),
+        TRANS=dict(
+            UPPER_LIM=0.1,
+            LOWER_LIM=-0.1,
+        ),
+        ZOOM=dict(
+            UPPER_LIM=1.25,
+            LOWER_LIM=0.75,
+        )
+    ),
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=24, # 24
+    IMS_PER_BATCH=2, # 24
     TOTAL_EPOCHS=100,
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
@@ -44,7 +61,7 @@ SOLVER = dict(
 )
 
 DATASETS = dict(
-    TRAIN=("lm_pbr_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train
+    TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train
     TEST=("lm_real_ape_test",),
     DET_FILES_TEST=(
         "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
