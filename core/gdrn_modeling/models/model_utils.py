@@ -31,7 +31,7 @@ def get_xyz_doublemask_doublevf_region_out_dim(cfg):
         raise NotImplementedError(f"unknown mask loss type: {mask_loss_type}")
 
     vf_loss_type = loss_cfg.VF_LOSS_TYPE
-    if vf_loss_type in ["MSE", "L1", "L2", "SmoothL1"]:
+    if vf_loss_type in ["MSE", "L1", "L2", "SmoothL1", "L1+Cos"]:
         vf_out_dim = 2 * 2 * g_head_cfg.NUM_CHANNAL_VF  # {u, v} * {vis, full} * N_fps
     else:
         raise NotImplementedError(f"unknown vf loss type: {vf_loss_type}")

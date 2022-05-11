@@ -11,7 +11,7 @@ import numpy as np
 import pickle
 
 from numpy.lib.polynomial import _binary_op_dispatcher
-from core.utils.augment import AugmentRGB
+from core.utils.augment import AugmentRGB, build_iaa_color_augmenter
 import torch.utils.data as data
 from core.utils.dataset_utils import flat_dataset_dicts
 from lib.utils.utils import lazy_property
@@ -300,6 +300,8 @@ class Base_DatasetFromList(data.Dataset):
                 JpegCompression(quality_lower=4, quality_upper=100, p=0.4),
             ], p=0.8)"""
             color_augmentor = eval(self.color_aug_code)
+        elif aug_type.lower() == 'iaa_custom':
+            color_augmentor = build_iaa_color_augmenter(bg_replace_pth=self.cfg.INPUT.COLOR_AUG_BG_REPLACE)
         else:
             color_augmentor = None
         # fmt: on
@@ -318,6 +320,8 @@ class Base_DatasetFromList(data.Dataset):
         elif aug_type.lower() in ["code_albu"]:
             augmented = self.color_augmentor(image=image)
             return augmented["image"]
+        elif aug_type.lower() in ["iaa_custom"]:
+            return self.color_augmentor(image=image)
         else:
             raise ValueError("aug_type: {} is not supported.".format(aug_type))
 

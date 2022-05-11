@@ -2,6 +2,7 @@ import logging
 import os
 import os.path as osp
 import torch
+from torch import nn
 from torch.cuda.amp import autocast, GradScaler
 import mmcv
 import time
@@ -31,6 +32,7 @@ from lib.vis_utils.image import grid_show, vis_bbox_opencv
 from lib.torch_utils.torch_utils import ModelEMA
 from lib.torch_utils.misc import nan_to_num
 from core.utils import solver_utils
+from core.utils.utils import eval_result_to_markdown
 import core.utils.my_comm as comm
 from core.utils.my_checkpoint import MyCheckpointer
 from core.utils.my_writer import MyCommonMetricPrinter, MyJSONWriter, MyTensorboardXWriter
@@ -145,8 +147,8 @@ def do_test(cfg, model, epoch=None, iteration=None):
         # if comm.is_main_process():
         #     logger.info("Evaluation results for {} in csv format:".format(dataset_name))
         #     print_csv_format(results_i)
-    if len(results) == 1:
-        results = list(results.values())[0]
+    # if len(results) == 1:
+    #     results = list(results.values())[0]
     return results
 
 
@@ -198,11 +200,14 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
             logger.info("Calculate dataset length with TRAIN2")
             dataset_len += len(data_loader_2.dataset)
         iters_per_epoch = dataset_len // images_per_batch
+
     max_iter = cfg.SOLVER.TOTAL_EPOCHS * iters_per_epoch
-    dprint("images_per_batch: ", images_per_batch)
-    dprint("dataset length: ", dataset_len)
-    dprint("iters per epoch: ", iters_per_epoch)
-    dprint("total iters: ", max_iter)
+    clip_grad = cfg.SOLVER.get("CLIP_GRAD", 100)
+
+    logger.info("images_per_batch: {}".format(images_per_batch))
+    logger.info("dataset length  : {}".format(dataset_len))
+    logger.info("iters per epoch : {}".format(iters_per_epoch))
+    logger.info("total iters     : {}".format(max_iter))
 
     bs_ref = cfg.SOLVER.get("REFERENCE_BS", 64)  # nominal batch size =========================
     accumulate_iter = max(round(bs_ref / cfg.SOLVER.IMS_PER_BATCH), 1)  # accumulate loss before optimizing
@@ -366,6 +371,9 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     for param in model.parameters():
                         if param.grad is not None:
                             nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
+                    total_norm = nn.utils.clip_grad_norm_(
+                        model.parameters(), max_norm=clip_grad
+                    )
                     optimizer.step()
 
             if comm.is_main_process():
@@ -377,17 +385,37 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 storage.put_scalar("lr", optimizer.param_groups[0]["lr"], smoothing_hint=False)
                 scheduler.step()
 
-            if cfg.TEST.EVAL_PERIOD > 0 and (iteration + 1) % cfg.TEST.EVAL_PERIOD == 0 and iteration != max_iter - 1:
+            # recording losses
+            tbx_writer.add_scalar("Losses/SUM", float(losses.item()), iteration)
+            for name, value in loss_dict.items():
+                loss_name = "Losses/{}".format(name)
+                loss_val = float(value)
+                tbx_writer.add_scalar(loss_name, loss_val, iteration)
+            # recording grad-norm
+            tbx_writer.add_scalar("Grad/total_norm", total_norm.item(), iteration)
+
+            # periodically do/save evaluations
+            if (
+                cfg.TEST.EVAL_PERIOD > 0
+                and epoch % cfg.TEST.EVAL_PERIOD == 0
+                and iteration % iters_per_epoch == 0
+                and iteration != max_iter - 1
+            ):
                 if ema is not None:
                     ema.update_attr(model)
-                    do_test(
+                    eval_res = do_test(
                         cfg,
                         model=ema.ema.module if hasattr(ema.ema, "module") else ema.ema,
                         epoch=epoch,
                         iteration=iteration,
                     )
                 else:
-                    do_test(cfg, model, epoch=epoch, iteration=iteration)
+                    eval_res = do_test(cfg, model, epoch=epoch, iteration=iteration)
+                for title, test_result in eval_res.items():
+                    tb_eval_markdown_str = eval_result_to_markdown(test_result)
+                    tbx_writer.add_text(
+                        "Eval metrics/{}".format(title), tb_eval_markdown_str, iteration
+                    )
                 # Compared to "train_net.py", the test results are not dumped to EventStorage
                 comm.synchronize()
 

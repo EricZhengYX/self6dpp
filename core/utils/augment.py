@@ -1,7 +1,12 @@
 import random
-
+from typing import Tuple
+import os
+import os.path as osp
 import cv2
 import numpy as np
+import imgaug.augmenters as iaa
+import imgaug.parameters as iap
+from imgaug.augmenters.arithmetic import multiply_elementwise
 
 
 class AugmentRGB(object):
@@ -261,3 +266,103 @@ class AugmentRGB(object):
         noise = eigvec.dot(eigval * noise)
         img += noise
         return np.clip(img, 0, 1)
+
+
+class CoarseImgPatch(iaa.CoarseDropout):
+    def __init__(self, p=(0.02, 0.1), size_px=None, size_percent=None, image_pth=None):
+        super().__init__(
+            p=p,
+            size_px=size_px,
+            size_percent=size_percent,
+            per_channel=False,
+            min_size=3,
+            seed=None,
+            name=None,
+            random_state="deprecated",
+            deterministic="deprecated",
+        )
+        self.__img_list = []
+        for obj in os.listdir(image_pth):
+            obj = osp.join(osp.abspath(image_pth), obj)
+            if osp.isfile(obj) and osp.splitext(obj)[1] in {".png", ".jpg", "jpeg"}:
+                self.__img_list.append(obj)
+        assert len(self.__img_list), image_pth
+        self.__img_picker = iap.Choice(self.__img_list)
+        self.__random_crop_gen = iap.Uniform(0, 1)
+
+    def _augment_batch_(self, batch, random_state, parents, hooks):
+        if batch.images is None:
+            return batch
+
+        images = batch.images
+        nb_images = len(images)
+        rss = random_state.duplicate(1 + nb_images)
+        per_channel_samples = self.per_channel.draw_samples(
+            (nb_images,), random_state=rss[0]
+        )
+        is_mul_binomial = isinstance(self.mul, iap.Binomial) or (
+            isinstance(self.mul, iap.FromLowerResolution)
+            and isinstance(self.mul.other_param, iap.Binomial)
+        )
+
+        gen = enumerate(zip(images, per_channel_samples, rss[1:]))
+        for i, (image, per_channel_samples_i, rs) in gen:
+            height, width, nb_channels = image.shape
+            sample_shape = (
+                height,
+                width,
+                nb_channels if per_channel_samples_i > 0.5 else 1,
+            )
+            mask = self.mul.draw_samples(sample_shape, random_state=rs)
+            inv_mask = 1 - mask
+
+            img_dir = self.__img_picker.draw_samples(1, random_state=rs)[0]
+            background = self._background_img_preprocess(
+                img_dir, mask.shape, random_state=rs
+            )
+
+            if mask.dtype.kind != "b" and is_mul_binomial:
+                mask = mask.astype(bool, copy=False)
+                inv_mask = inv_mask.astype(bool, copy=False)
+
+            batch.images[i] = multiply_elementwise(image, mask) + multiply_elementwise(
+                background, inv_mask
+            )
+
+        return batch
+
+    def _background_img_preprocess(
+        self, img_dir: str, align_size: Tuple[int, int], random_state
+    ):
+        img = cv2.imread(img_dir)
+        align_h, align_w, _ = align_size
+        ori_h, ori_w, _ = img.shape
+        h_ratio, w_ratio = align_h / ori_h, align_w / ori_w
+        larger_ratio = max(h_ratio, w_ratio)
+        out_h = max(int(ori_h * larger_ratio), align_h)
+        out_w = max(int(ori_w * larger_ratio), align_w)
+        res = cv2.resize(img, dsize=(out_w, out_h))
+        enlargement = self.__random_crop_gen.draw_samples(2, random_state=random_state)
+        t_space = int((out_h - align_h) * enlargement[0])
+        l_space = int((out_w - align_w) * enlargement[1])
+        return res[t_space : t_space + align_h, l_space : l_space + align_w, :]
+
+
+def build_iaa_color_augmenter(bg_replace_pth=None):
+    seq = iaa.Sequential(
+        [
+            iaa.Sometimes(0.5, CoarseImgPatch(p=0.2, size_percent=0.05, image_pth=bg_replace_pth)),
+            iaa.Sometimes(0.5, iaa.GaussianBlur(1.2 * np.random.rand())),
+            iaa.Sometimes(0.3, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
+            iaa.Sometimes(0.3, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
+            iaa.Sometimes(0.5, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
+            iaa.Sometimes(0.3, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+            iaa.Sometimes(0.5, iaa.Add((-25, 25), per_channel=0.3)),
+            iaa.Sometimes(0.3, iaa.Invert(0.2, per_channel=True)),
+            iaa.Sometimes(0.5, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
+            iaa.Sometimes(0.5, iaa.Multiply((0.6, 1.4))),
+            iaa.Sometimes(0.5, iaa.LinearContrast((0.5, 2.2), per_channel=0.3)),
+        ],
+        random_order=True,
+    )
+    return seq

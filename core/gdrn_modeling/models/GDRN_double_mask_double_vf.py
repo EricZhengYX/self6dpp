@@ -95,7 +95,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         roi_extents=None,
         resize_ratios=None,
         do_loss=False,
-        loss_mode='geo',
+        loss_mode="geo",
     ):
         cfg = self.cfg
         net_cfg = cfg.MODEL.POSE_NET
@@ -121,7 +121,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             coor_z,
             region,
         ) = self.geo_head_net(conv_feat)
-        if do_loss and loss_mode == 'geo':
+        if do_loss and loss_mode == "geo":
             # return in advance, training in geo mode
             out_dict = {}
             loss_dict = self.geo_loss(
@@ -532,6 +532,10 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     loss_dict["loss_vf_vis"] = nn.SmoothL1Loss(reduction="mean")(
                         out_vf_vis, gt_vf_visib
                     )
+                elif vf_loss_type == "L1+Cos":
+                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
+                        out_vf_vis, gt_vf_visib
+                    ) + _cosine_similarity_loss_vf(out_vf_vis, gt_vf_visib)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_vis"] *= loss_cfg.VIS_VF_LW
@@ -549,6 +553,10 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     loss_dict["loss_vf_full"] = nn.SmoothL1Loss(reduction="mean")(
                         out_vf_full, gt_vf_full
                     )
+                elif vf_loss_type == "L1+Cos":
+                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
+                        out_vf_full, gt_vf_full
+                    ) + _cosine_similarity_loss_vf(out_vf_full, gt_vf_full)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_full"] *= loss_cfg.FULL_VF_LW
@@ -751,29 +759,29 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         return loss_dict
 
     def geo_loss(
-            self,
-            cfg,
-            # mask
-            out_mask_vis,
-            out_mask_full,
-            gt_mask_trunc,
-            gt_mask_visib,
-            gt_mask_obj,
-            gt_mask_full,
-            # vector field
-            out_vf_vis,
-            out_vf_full,
-            gt_vf_visib,
-            gt_vf_full,
-            # xyz
-            out_x,
-            out_y,
-            out_z,
-            gt_xyz,
-            gt_xyz_bin,
-            # roi region
-            out_region,
-            gt_region,
+        self,
+        cfg,
+        # mask
+        out_mask_vis,
+        out_mask_full,
+        gt_mask_trunc,
+        gt_mask_visib,
+        gt_mask_obj,
+        gt_mask_full,
+        # vector field
+        out_vf_vis,
+        out_vf_full,
+        gt_vf_visib,
+        gt_vf_full,
+        # xyz
+        out_x,
+        out_y,
+        out_z,
+        gt_xyz,
+        gt_xyz_bin,
+        # roi region
+        out_region,
+        gt_region,
     ):
         net_cfg = cfg.MODEL.POSE_NET
         g_head_cfg = net_cfg.GEO_HEAD
@@ -903,6 +911,10 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     loss_dict["loss_vf_vis"] = nn.SmoothL1Loss(reduction="mean")(
                         out_vf_vis, gt_vf_visib
                     )
+                elif vf_loss_type == "L1+Cos":
+                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
+                        out_vf_vis, gt_vf_visib
+                    ) + _cosine_similarity_loss_vf(out_vf_vis, gt_vf_visib)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_vis"] *= loss_cfg.VIS_VF_LW
@@ -920,6 +932,10 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     loss_dict["loss_vf_full"] = nn.SmoothL1Loss(reduction="mean")(
                         out_vf_full, gt_vf_full
                     )
+                elif vf_loss_type == "L1+Cos":
+                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
+                        out_vf_full, gt_vf_full
+                    ) + _cosine_similarity_loss_vf(out_vf_full, gt_vf_full)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_full"] *= loss_cfg.FULL_VF_LW
@@ -935,11 +951,11 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     reduction="sum", weight=None
                 )  # g_head_cfg.XYZ_BIN+1
                 loss_dict["loss_region"] = (
-                        loss_func(
-                            out_region * gt_mask_region[:, None],
-                            gt_region * gt_mask_region.long(),
-                        )
-                        / gt_mask_region.sum().float().clamp(min=1.0)
+                    loss_func(
+                        out_region * gt_mask_region[:, None],
+                        gt_region * gt_mask_region.long(),
+                    )
+                    / gt_mask_region.sum().float().clamp(min=1.0)
                 )
             else:
                 raise NotImplementedError(
@@ -1049,3 +1065,21 @@ def build_model_optimizer(cfg, is_test=False):
 
     model.to(torch.device(cfg.MODEL.DEVICE))
     return model, optimizer
+
+
+def _cosine_similarity_loss_vf(out_vf: torch.Tensor, gt_vf: torch.Tensor, no_offset=True):
+    b, c, w, h = out_vf.shape
+    reshape_out_vf = out_vf.reshape(b, c // 2, 2, w, h)
+    reshape_gt_vf = gt_vf.reshape(b, c // 2, 2, w, h)
+
+    num_foreground_pix = torch.logical_or(
+        reshape_gt_vf[:, :, 0, :, :] != 0,
+        reshape_gt_vf[:, :, 1, :, :] != 0
+    ).sum()
+
+    cs_vf = F.cosine_similarity(reshape_out_vf, reshape_gt_vf, dim=2)  # b, c//2, w, h
+
+    if no_offset:
+        return 1 - cs_vf.sum() / num_foreground_pix
+    else:
+        return 1 - cs_vf.mean()

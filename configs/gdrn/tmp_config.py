@@ -6,7 +6,8 @@ INPUT = dict(
     TRUNCATE_FG=False,
     CHANGE_BG_PROB=0.,  # 0.5
     COLOR_AUG_PROB=0.8,
-    COLOR_AUG_TYPE="code",
+    COLOR_AUG_TYPE="iaa_custom",
+    COLOR_AUG_BG_REPLACE="datasets/VOCdevkit/VOC2012/JPEGImages",
     COLOR_AUG_CODE=(
         "Sequential(["
         # Sometimes(0.5, PerspectiveTransform(0.05)),
@@ -58,6 +59,7 @@ SOLVER = dict(
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=1000,
+    CLIP_GRAD=100,
 )
 
 DATASETS = dict(
@@ -121,7 +123,7 @@ MODEL = dict(
             REGION_LOSS_MASK_GT="visib",  # trunc | visib | obj
             REGION_LW=1.0,
             # vf loss ---------------------------
-            VF_LOSS_TYPE='SmoothL1',
+            VF_LOSS_TYPE="L1+Cos",
             VIS_VF_LW=1.0,
             FULL_VF_LW=1.0,
             # pm loss --------------
@@ -138,4 +140,8 @@ MODEL = dict(
     ),
 )
 
-TEST = dict(EVAL_PERIOD=1000, VIS=False, TEST_BBOX_TYPE="est")  # gt | est
+TEST = dict(
+    EVAL_PERIOD=5, # count in epochs
+    VIS=False,
+    TEST_BBOX_TYPE="est"
+)  # gt | est

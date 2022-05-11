@@ -229,3 +229,13 @@ def allo_to_ego_mat_torch(translation, rot_allo, eps=1e-4):
     # Apply quaternion for transformation from allocentric to egocentric.
     rot_ego = torch.matmul(rot_allo_to_ego, rot_allo)
     return rot_ego
+
+
+def eval_result_to_markdown(eval: str):
+    data = eval.split("\n")
+    num_col = len(data[0].split())
+    res = "|" + "|".join(data[0].split()) + "|"
+    res += "  \n|" + "|".join([" :----: "] * num_col) + "|"
+    for row in data[1:]:
+        res += "  \n|" + "|".join(row.split()) + "|"
+    return res

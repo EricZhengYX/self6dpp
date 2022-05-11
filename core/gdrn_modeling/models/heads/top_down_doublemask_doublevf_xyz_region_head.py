@@ -1,4 +1,6 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.modules.batchnorm import _BatchNorm
 from mmcv.cnn import normal_init, constant_init
 from lib.torch_utils.layers.layer_utils import get_norm, get_nn_act_func
@@ -208,10 +210,12 @@ class TopDownDoubleMaskDoubleVFXyzRegionHead(nn.Module):
             region = out[:, sum_dim : sum_dim + region_dim, :, :]
 
             sum_dim += region_dim
-            vis_vf = out[:, sum_dim : sum_dim + (vf_dim // 2), :, :]
+            raw_vis_vf = out[:, sum_dim : sum_dim + (vf_dim // 2), :, :]
+            vis_vf = _post_process_vf(raw_vis_vf)
 
             sum_dim += (vf_dim // 2)
-            full_vf = out[:, sum_dim :, :, :]
+            raw_full_vf = out[:, sum_dim :, :, :]
+            full_vf = _post_process_vf(raw_full_vf)
 
             bs, c, h, w = xyz.shape
             xyz = xyz.view(bs, 3, xyz_dim // 3, h, w)
@@ -223,8 +227,8 @@ class TopDownDoubleMaskDoubleVFXyzRegionHead(nn.Module):
             vis_mask = self.vis_mask_out_layer(x)
             full_mask = self.full_mask_out_layer(x)
 
-            vis_vf = self.vis_vf_out_layer(x)
-            full_vf = self.full_vf_out_layer(x)
+            vis_vf = _post_process_vf(self.vis_vf_out_layer(x))
+            full_vf = _post_process_vf(self.full_vf_out_layer(x))
 
             xyz = self.xyz_out_layer(x)
             bs, c, h, w = xyz.shape
@@ -252,3 +256,16 @@ def _get_deconv_pad_outpad(deconv_kernel):
         raise ValueError(f"Not supported num_kernels ({deconv_kernel}).")
 
     return deconv_kernel, padding, output_padding
+
+
+def _post_process_vf(raw_vf: torch.Tensor):
+    """
+
+    @param raw_vf: B * C(2*#fps) * W * H
+    @return: same sized
+    """
+    b, c, w, h = raw_vf.shape
+    vf_reshape = raw_vf.reshape(b, c // 2, 2, w, h)
+    vf_softmax = F.softmax(vf_reshape, dim=2)
+    vf_sqrt = torch.sqrt(vf_softmax)
+    return vf_sqrt.reshape(b, c, w, h)
