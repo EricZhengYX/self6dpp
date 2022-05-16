@@ -3,11 +3,12 @@ import cv2
 import mmcv
 import numpy as np
 import torch
+from torchvision.ops import roi_align
 import time
 from detectron2.layers.roi_align import ROIAlign
 from torchvision.ops import RoIPool
 from scipy.spatial.distance import cdist
-from lib.pysixd.misc import project_pts
+from lib.pysixd.misc import project_pts, project_pts_torch
 
 
 def to_tensor(data):
@@ -303,7 +304,7 @@ def compute_vf(mask_full, mask_visib, fps_points, K, pose, normalized=True):  # 
     mesh = np.tile(np.dstack((hv, wv)).reshape(h, w, 1, 2), (1, 1, f, 1))  # (h, w, f, 2)
     fps_pixel = np.tile(pixel_ids.reshape(1, 1, f, 2), (h, w, 1, 1))  # (h, w, f, 2)
 
-    vf = (mesh - fps_pixel)  # (h, w, f, 2)
+    vf = fps_pixel - mesh  # (h, w, f, 2)
 
     if normalized:
         vf = vf / np.linalg.norm(vf, axis=-1, keepdims=True)
@@ -314,6 +315,45 @@ def compute_vf(mask_full, mask_visib, fps_points, K, pose, normalized=True):  # 
     vf_visib = mask_visib.reshape(h, w, 1, 1) * vf
 
     return vf_full, vf_visib
+
+
+def compute_vf_torch(mask, fps_points, K, R, T, roi_center, roi_scale):  # 'vf' means vector field
+    '''
+
+    @param mask: B*1*1*h*w
+    @param fps_points: B*f*3
+    @param K: B*3*3
+    @param R: B*3*3
+    @param T: B*3
+    @param roi_center: B*2
+    @param roi_scale: 1*B
+    @return: f*2*w*h
+    '''
+    device = mask.device
+    b, _, _, h, w = mask.shape
+    _, f, _ = fps_points.shape
+
+    pixel_fps = project_pts_torch(fps_points, K, R, T).permute(0, 2, 1).view(b, f, 2, 1, 1)  # B*f*2*1*1
+
+    roi_xy0 = roi_center - roi_scale / 2
+    roi_xy1 = roi_center + roi_scale / 2
+    # roi_size = roi_xy1 - roi_xy0
+
+    _meshs = []
+    for i in range(b):
+        linspace_x = torch.linspace(roi_xy0[i, 0], roi_xy1[i, 0], h)
+        linspace_y = torch.linspace(roi_xy0[i, 1], roi_xy1[i, 1], w)
+        x_pos, y_pos = torch.meshgrid(linspace_x, linspace_y)
+        mesh = torch.stack((x_pos, y_pos), dim=0).cuda()
+        _meshs.append(mesh)
+    meshs = torch.stack(_meshs, dim=0).unsqueeze(1).repeat((1, f, 1, 1, 1))  # B*f*2*h*w
+
+    vf = pixel_fps - meshs.permute(0, 1, 2, 4, 3)  # b*f*2*h*w
+    # TODO: figure out why here is this permutation problem
+
+    vf = vf / torch.norm(vf, dim=2, keepdim=True)
+
+    return vf * mask
 
 '''
 xyz_crop_tile = np.tile(xyz_crop.reshape(1, bh * bw, 3), (f, 1, 1))  # (f, bh * bw, 3)

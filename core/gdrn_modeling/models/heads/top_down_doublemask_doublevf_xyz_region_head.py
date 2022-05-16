@@ -268,4 +268,4 @@ def _post_process_vf(raw_vf: torch.Tensor):
     vf_reshape = raw_vf.reshape(b, c // 2, 2, w, h)
     vf_softmax = F.softmax(vf_reshape, dim=2)
     vf_sqrt = torch.sqrt(vf_softmax)
-    return vf_sqrt.reshape(b, c, w, h)
+    return vf_sqrt  # b*(c//2)*2*w*h

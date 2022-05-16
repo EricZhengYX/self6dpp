@@ -1,10 +1,10 @@
 _base_ = ["../_base_/gdrn_base.py"]
 
-OUTPUT_DIR = "output/gdrn/lm_pbr/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_DoubleMask_lm_pbr_100e/ape"
+OUTPUT_DIR = "output/gdrn/lm_pbr/my_config/ape"
 INPUT = dict(
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
-    CHANGE_BG_PROB=0.,  # 0.5
+    CHANGE_BG_PROB=0.5,  # 0.5
     COLOR_AUG_PROB=0.8,
     COLOR_AUG_TYPE="iaa_custom",
     COLOR_AUG_BG_REPLACE="datasets/VOCdevkit/VOC2012/JPEGImages",
@@ -49,7 +49,7 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=2, # 24
+    IMS_PER_BATCH=24,  # 24
     TOTAL_EPOCHS=100,
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
@@ -63,10 +63,11 @@ SOLVER = dict(
 )
 
 DATASETS = dict(
-    TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train
-    TEST=("lm_real_ape_test",),
+    TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train, lmo_test, lm_real_ape_test
+    TEST=("lmo_test",),
     DET_FILES_TEST=(
-        "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
+        "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
+        # "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
     ),
 )
 
@@ -75,7 +76,7 @@ MODEL = dict(
     PIXEL_MEAN=[0.0, 0.0, 0.0],
     PIXEL_STD=[255.0, 255.0, 255.0],
     POSE_NET=dict(
-        NAME="GDRN_double_mask_double_vf",
+        NAME="GDRN_double_mask_double_vf",  # GDRN_double_mask_double_vf, GDRN_double_mask
         XYZ_ONLINE=False,
         BACKBONE=dict(
             FREEZE=False,
@@ -92,7 +93,7 @@ MODEL = dict(
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(
-                type="TopDownDoubleMaskDoubleVFXyzRegionHead",
+                type="TopDownDoubleMaskDoubleVFXyzRegionHead",  # TopDownDoubleMaskXyzRegionHead, TopDownDoubleMaskDoubleVFXyzRegionHead
                 in_dim=2048,  # this is num out channels of backbone conv feature
             ),
             NUM_REGIONS=64,
@@ -100,9 +101,15 @@ MODEL = dict(
             NUM_CHANNAL_VF=16,
         ),
         PNP_NET=dict(
-            INIT_CFG=dict(norm="GN", act="gelu"),
+            INIT_CFG=dict(
+                norm="GN",
+                act="gelu",
+                type="ConvPnPNetAll",
+            ),
             REGION_ATTENTION=True,
             WITH_2D_COORD=True,
+            MASK_ATTENTION="concat",
+            WITH_VF="both",
             ROT_TYPE="allo_rot6d",
             TRANS_TYPE="centroid_z",
         ),
@@ -126,6 +133,9 @@ MODEL = dict(
             VF_LOSS_TYPE="L1+Cos",
             VIS_VF_LW=1.0,
             FULL_VF_LW=1.0,
+            # vf-rt loss ---------------------------
+            VF_RT_LOSS_TYPE="L1+Cos",
+            VF_RT_LW=1.0,
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM

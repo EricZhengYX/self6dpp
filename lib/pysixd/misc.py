@@ -10,6 +10,7 @@ import cv2
 import mmcv
 import subprocess
 import numpy as np
+import torch
 from numba import jit, njit
 from PIL import Image, ImageDraw
 from scipy.spatial import distance
@@ -552,13 +553,13 @@ def project_model(model, pose, K):
 
 
 def project_pts(pts, K, R, t):
-    """Projects 3D points.
-
-    :param pts: nx3 ndarray with the 3D points.
-    :param K: 3x3 ndarray with an intrinsic camera matrix.
-    :param R: 3x3 ndarray with a rotation matrix.
-    :param t: 3x1 ndarray with a translation vector.
-    :return: nx2 ndarray with 2D image coordinates of the projections.
+    """
+    Projects 3D points.
+    @param pts: nx3 ndarray with the 3D points.
+    @param K: 3x3 ndarray with an intrinsic camera matrix.
+    @param R: 3x3 ndarray with a rotation matrix.
+    @param t: 3x1 ndarray with a translation vector.
+    @return: nx2 ndarray with 2D image coordinates of the projections.
     """
     assert pts.shape[1] == 3
     P = K.dot(np.hstack((R, t.reshape(3, 1))))  # 3x4
@@ -566,6 +567,25 @@ def project_pts(pts, K, R, t):
     pts_im = P.dot(pts_h.T)  # 3xN
     pts_im /= pts_im[2, :]  # 3xN
     return pts_im[:2, :].T  # Nx2
+
+
+def project_pts_torch(pts, K, R, t):
+    """
+    Projects 3D points.
+    @param pts: BxNx3
+    @param K: Bx3x3
+    @param R: Bx3x3
+    @param t: Bx3
+    @return: BxNx2
+    """
+    b, n, _ = pts.shape
+
+    P = torch.bmm(K, torch.cat((R, t.unsqueeze(2)), dim=2))  # B*3*4
+    pts_h = torch.cat((pts.permute(0, 2, 1), torch.ones((b, 1, n), device=pts.device)), dim=1)  # B*4*n
+    pts_im = torch.bmm(P, pts_h)  # B*3*n
+
+    pts_im_norm_z = pts_im / pts_im[:, 2:, :]  # B*3*n
+    return pts_im_norm_z[:, :2, :]  # B*2*n
 
 
 @jit

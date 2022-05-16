@@ -224,7 +224,7 @@ def get_pnp_net(cfg):
     pnp_net_cfg = net_cfg.PNP_NET
     loss_cfg = net_cfg.LOSS_CFG
 
-    xyz_dim, mask_dim, region_dim = get_xyz_mask_region_out_dim(cfg)
+    xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
 
     if loss_cfg.XYZ_LOSS_TYPE in ["CE_coor", "CE"]:
         pnp_net_in_channel = xyz_dim - 3  # for bin xyz, no bg channel
@@ -238,7 +238,16 @@ def get_pnp_net(cfg):
         pnp_net_in_channel += g_head_cfg.NUM_REGIONS
 
     if pnp_net_cfg.MASK_ATTENTION in ["concat"]:  # do not add dim for none/mul
-        pnp_net_in_channel += 1
+        pnp_net_in_channel += 2
+
+    if pnp_net_cfg.WITH_VF in ["visib", "full"]:
+        pnp_net_in_channel += 2 * g_head_cfg.NUM_CHANNAL_VF
+    elif pnp_net_cfg.WITH_VF == "both":
+        pnp_net_in_channel += 4 * g_head_cfg.NUM_CHANNAL_VF
+    elif pnp_net_cfg.WITH_VF == "none":
+        pass
+    else:
+        raise ValueError(f"Unknown ROT_TYPE: {pnp_net_cfg.WITH_VF}")
 
     if pnp_net_cfg.ROT_TYPE in ["allo_quat", "ego_quat"]:
         rot_dim = 4
@@ -257,7 +266,13 @@ def get_pnp_net(cfg):
     pnp_net_init_cfg = copy.deepcopy(pnp_net_cfg.INIT_CFG)
     pnp_head_type = pnp_net_init_cfg.pop("type")
 
-    if pnp_head_type in ["ConvPnPNet", "ConvPnPNetCls"]:
+    if pnp_head_type == "ConvPnPNetAll":
+        pnp_net_init_cfg.update(
+            nIn=pnp_net_in_channel,
+            rot_dim=rot_dim,
+            mask_attention_type=pnp_net_cfg.MASK_ATTENTION,
+        )
+    elif pnp_head_type in ["ConvPnPNet", "ConvPnPNetCls"]:
         pnp_net_init_cfg.update(
             nIn=pnp_net_in_channel,
             rot_dim=rot_dim,

@@ -636,10 +636,10 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
             roi_vf_full = crop_resize_by_warp_affine(
                 vf_full.reshape(_h, _w, -1), bbox_center, scale, out_res, interpolation=mask_xyz_interp
-            ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)
+            ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)  # 32*64*64
             roi_vf_visib = crop_resize_by_warp_affine(
                 vf_visib.reshape(_h, _w, -1), bbox_center, scale, out_res, interpolation=mask_xyz_interp
-            ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)
+            ).reshape(out_res, out_res, _f * _c).transpose(2, 0, 1)  # 32*64*64
             '''
             img = read_image_mmcv(dataset_dict["file_name"], format=self.img_format)
             iimg=crop_resize_by_warp_affine(
@@ -691,8 +691,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             if g_head_cfg.NUM_REGIONS > 1:
                 dataset_dict["roi_region"] = _make_aug(roi_region, np.int32)
             if g_head_cfg.NUM_CHANNAL_VF > 1:
-                dataset_dict["roi_vf_full"] = _make_aug(roi_vf_full)
-                dataset_dict["roi_vf_visib"] = _make_aug(roi_vf_visib)
+                dataset_dict["roi_vf_full"] = _make_aug(roi_vf_full).reshape(-1, 2, out_res, out_res)
+                dataset_dict["roi_vf_visib"] = _make_aug(roi_vf_visib).reshape(-1, 2, out_res, out_res)
             dataset_dict["roi_mask_trunc"] = _make_aug(roi_mask_trunc)
             dataset_dict["roi_mask_visib"] = _make_aug(roi_mask_visib)
             dataset_dict["roi_mask_obj"] = _make_aug(roi_mask_obj)
@@ -714,8 +714,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             if g_head_cfg.NUM_REGIONS > 1:
                 dataset_dict["roi_region"] = torch.as_tensor(roi_region.astype(np.int32)).contiguous()
             if g_head_cfg.NUM_CHANNAL_VF > 1:
-                dataset_dict["roi_vf_full"] = torch.as_tensor(roi_vf_full.astype(np.float)).contiguous()
-                dataset_dict["roi_vf_visib"] = torch.as_tensor(roi_vf_visib.astype(np.float)).contiguous()
+                dataset_dict["roi_vf_full"] = torch.as_tensor(roi_vf_full.reshape(-1, 2, out_res, out_res).astype(np.float)).contiguous()
+                dataset_dict["roi_vf_visib"] = torch.as_tensor(roi_vf_visib.reshape(-1, 2, out_res, out_res).astype(np.float)).contiguous()
+                dataset_dict["fps"] = torch.as_tensor(fps_points.astype("float32")).contiguous()
 
             dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
 

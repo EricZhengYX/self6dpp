@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from core.utils.solver_utils import build_optimizer_with_params
+from core.utils.data_utils import compute_vf_torch
 from detectron2.utils.events import get_event_storage
 from mmcv.runner import load_checkpoint
 
@@ -91,9 +92,11 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         roi_coord_2d_rel=None,
         roi_cams=None,
         roi_centers=None,
+        roi_scale=None,
         roi_whs=None,
         roi_extents=None,
         resize_ratios=None,
+        fps_pts=None,
         do_loss=False,
         loss_mode="geo",
     ):
@@ -217,10 +220,11 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             region_atten = region_softmax
 
         pred_rot_, pred_t_ = self.pnp_net(
-            coor_feat,
+            coor_feat=coor_feat,
             region=region_atten,
+            mask=torch.cat((full_mask, vis_mask), dim=1),
+            vf=torch.cat((full_vf, vis_vf), dim=1),
             extents=roi_extents,
-            mask_attention=mask_atten,
         )
 
         # convert pred_rot to rot mat -------------------------
@@ -323,23 +327,28 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
 
             loss_dict = self.gdrn_loss(
                 cfg=self.cfg,
+                # mask
                 out_mask_vis=vis_mask,
                 out_mask_full=full_mask,
-                out_vf_vis=vis_vf,
-                out_vf_full=full_vf,
                 gt_mask_trunc=gt_mask_trunc,
                 gt_mask_visib=gt_mask_visib,
                 gt_mask_obj=gt_mask_obj,
                 gt_mask_full=gt_mask_full,
+                # vf
+                out_vf_vis=vis_vf,
+                out_vf_full=full_vf,
                 gt_vf_visib=gt_vf_visib,
                 gt_vf_full=gt_vf_full,
+                # xyz
                 out_x=coor_x,
                 out_y=coor_y,
                 out_z=coor_z,
                 gt_xyz=gt_xyz,
                 gt_xyz_bin=gt_xyz_bin,
+                # roi region
                 out_region=region,
                 gt_region=gt_region,
+                # r&t
                 out_trans=pred_trans,
                 gt_trans=gt_trans,
                 out_rot=pred_ego_rot,
@@ -347,10 +356,16 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                 out_centroid=pred_t_[:, :2],  # TODO: get these from trans head
                 out_trans_z=pred_t_[:, 2],
                 gt_trans_ratio=gt_trans_ratio,
+                # models information
                 gt_points=gt_points,
+                fps_pts=fps_pts,
+                cam_intrinsic=roi_cams,
                 sym_infos=sym_infos,
                 extents=roi_extents,
-                # roi_classes=roi_classes,
+                # roi
+                roi_centers=roi_centers,
+                roi_scale=roi_scale,
+                roi_classes=roi_classes,
             )
 
             if net_cfg.USE_MTL:
@@ -375,33 +390,45 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
     def gdrn_loss(
         self,
         cfg,
+        # mask
         out_mask_vis,
         out_mask_full,
-        out_vf_vis,
-        out_vf_full,
         gt_mask_trunc,
         gt_mask_visib,
         gt_mask_obj,
         gt_mask_full,
+        # vf
+        out_vf_vis,
+        out_vf_full,
         gt_vf_visib,
         gt_vf_full,
+        # xyz
         out_x,
         out_y,
         out_z,
         gt_xyz,
         gt_xyz_bin,
+        # roi region
         out_region,
         gt_region,
-        out_rot=None,
-        gt_rot=None,
-        out_trans=None,
-        gt_trans=None,
-        out_centroid=None,
-        out_trans_z=None,
-        gt_trans_ratio=None,
-        gt_points=None,
-        sym_infos=None,
-        extents=None,
+        # r&t
+        out_rot,
+        gt_rot,
+        out_trans,
+        gt_trans,
+        out_centroid,
+        out_trans_z,
+        gt_trans_ratio,
+        # models information
+        gt_points,
+        fps_pts,
+        cam_intrinsic,
+        sym_infos,
+        extents,
+        # roi
+        roi_centers,
+        roi_scale,
+        roi_classes,
     ):
         net_cfg = cfg.MODEL.POSE_NET
         g_head_cfg = net_cfg.GEO_HEAD
@@ -416,6 +443,8 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             "obj": gt_mask_obj,
             "full": gt_mask_full,
         }
+
+        b, _, w, h = gt_xyz.shape
 
         # region xyz loss ----------------------------------
         if not g_head_cfg.FREEZE:
@@ -520,46 +549,80 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         if not g_head_cfg.FREEZE:
             vf_loss_type = loss_cfg.VF_LOSS_TYPE
             if gt_vf_visib is not None and out_vf_vis is not None:
-                if vf_loss_type == "L1":
+                _mask = gt_mask_visib.view(b, 1, 1, w, h)
+                masked_out_vf_vis = out_vf_vis * _mask
+                masked_gt_vf_visib = gt_vf_visib * _mask
+                if vf_loss_type == "L1+Cos":
                     loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
+                        masked_out_vf_vis, masked_gt_vf_visib
+                    ) + _cosine_similarity_loss_vf(
+                        masked_out_vf_vis, masked_gt_vf_visib
                     )
-                elif vf_loss_type == "L2" or vf_loss_type == "MSE":
-                    loss_dict["loss_vf_vis"] = nn.MSELoss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
-                    )
-                elif vf_loss_type == "SmoothL1":
-                    loss_dict["loss_vf_vis"] = nn.SmoothL1Loss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
-                    )
-                elif vf_loss_type == "L1+Cos":
-                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
-                    ) + _cosine_similarity_loss_vf(out_vf_vis, gt_vf_visib)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_vis"] *= loss_cfg.VIS_VF_LW
 
             if gt_vf_full is not None and out_vf_full is not None:
-                if vf_loss_type == "L1":
+                _mask = gt_mask_full.view(b, 1, 1, w, h)
+                masked_out_vf_full = out_vf_full * _mask
+                masked_gt_vf_full = gt_vf_full * _mask
+                if vf_loss_type == "L1+Cos":
                     loss_dict["loss_vf_full"] = nn.L1Loss(reduction="mean")(
-                        out_vf_full, gt_vf_full
+                        masked_out_vf_full, masked_gt_vf_full
+                    ) + _cosine_similarity_loss_vf(
+                        masked_out_vf_full, masked_gt_vf_full
                     )
-                elif vf_loss_type == "L2" or vf_loss_type == "MSE":
-                    loss_dict["loss_vf_full"] = nn.MSELoss(reduction="mean")(
-                        out_vf_full, gt_vf_full
-                    )
-                elif vf_loss_type == "SmoothL1":
-                    loss_dict["loss_vf_full"] = nn.SmoothL1Loss(reduction="mean")(
-                        out_vf_full, gt_vf_full
-                    )
-                elif vf_loss_type == "L1+Cos":
-                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
-                        out_vf_full, gt_vf_full
-                    ) + _cosine_similarity_loss_vf(out_vf_full, gt_vf_full)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_full"] *= loss_cfg.FULL_VF_LW
+        # endregion
+
+        # region vf-rt loss
+        if not g_head_cfg.FREEZE:
+            if out_vf_full is not None:
+                vf_rt_loss_type = loss_cfg.VF_RT_LOSS_TYPE
+                assert vf_rt_loss_type == "L1+Cos"
+
+                _mask = gt_mask_full.view(b, 1, 1, w, h)
+                masked_out_vf_full = out_vf_full * _mask
+                masked_rt_vf_full = compute_vf_torch(
+                    _mask,
+                    fps_pts,
+                    cam_intrinsic,
+                    out_rot,
+                    out_trans,
+                    roi_centers,
+                    roi_scale.unsqueeze(1),
+                )  # b*f*2*h*w
+
+                '''
+gt_rt_vf = compute_vf_torch(
+    _mask,
+    fps_pts,
+    cam_intrinsic,
+    gt_rot,
+    gt_trans,
+    roi_centers,
+    roi_scale.unsqueeze(1),
+)  # b*f*2*h*w
+# for i in range(16):
+i = 0
+plt.figure()
+plt.subplot(2, 2, 1)
+plt.imshow(gt_rt_vf[0, i, 0, ...].cpu().detach())
+plt.subplot(2, 2, 2)
+plt.imshow(gt_rt_vf[0, i, 1, ...].cpu().detach())
+plt.subplot(2, 2, 3)
+plt.imshow(gt_vf_full[0, i, 0, ...].cpu().detach())
+plt.subplot(2, 2, 4)
+plt.imshow(gt_vf_full[0, i, 1, ...].cpu().detach())
+plt.show()
+                '''
+
+                loss_dict["loss_vf_rt"] = nn.L1Loss(reduction="mean")(
+                    masked_out_vf_full, masked_rt_vf_full
+                ) + _cosine_similarity_loss_vf(masked_out_vf_full, masked_rt_vf_full)
+                loss_dict["loss_vf_rt"] *= loss_cfg.VF_RT_LW
         # endregion
 
         # region roi region loss --------------------
@@ -796,6 +859,8 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             "full": gt_mask_full,
         }
 
+        b, _, w, h = gt_xyz.shape
+
         # region xyz loss ----------------------------------
         if not g_head_cfg.FREEZE:
             xyz_loss_type = loss_cfg.XYZ_LOSS_TYPE
@@ -899,43 +964,29 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         if not g_head_cfg.FREEZE:
             vf_loss_type = loss_cfg.VF_LOSS_TYPE
             if gt_vf_visib is not None and out_vf_vis is not None:
-                if vf_loss_type == "L1":
+                _mask = gt_mask_visib.view(b, 1, 1, w, h)
+                masked_out_vf_vis = out_vf_vis * _mask
+                masked_gt_vf_visib = gt_vf_visib * _mask
+                if vf_loss_type == "L1+Cos":
                     loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
+                        masked_out_vf_vis, masked_gt_vf_visib
+                    ) + _cosine_similarity_loss_vf(
+                        masked_out_vf_vis, masked_gt_vf_visib
                     )
-                elif vf_loss_type == "L2" or vf_loss_type == "MSE":
-                    loss_dict["loss_vf_vis"] = nn.MSELoss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
-                    )
-                elif vf_loss_type == "SmoothL1":
-                    loss_dict["loss_vf_vis"] = nn.SmoothL1Loss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
-                    )
-                elif vf_loss_type == "L1+Cos":
-                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
-                        out_vf_vis, gt_vf_visib
-                    ) + _cosine_similarity_loss_vf(out_vf_vis, gt_vf_visib)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_vis"] *= loss_cfg.VIS_VF_LW
 
             if gt_vf_full is not None and out_vf_full is not None:
-                if vf_loss_type == "L1":
+                _mask = gt_mask_full.view(b, 1, 1, w, h)
+                masked_out_vf_full = out_vf_full * _mask
+                masked_gt_vf_full = gt_vf_full * _mask
+                if vf_loss_type == "L1+Cos":
                     loss_dict["loss_vf_full"] = nn.L1Loss(reduction="mean")(
-                        out_vf_full, gt_vf_full
+                        masked_out_vf_full, masked_gt_vf_full
+                    ) + _cosine_similarity_loss_vf(
+                        masked_out_vf_full, masked_gt_vf_full
                     )
-                elif vf_loss_type == "L2" or vf_loss_type == "MSE":
-                    loss_dict["loss_vf_full"] = nn.MSELoss(reduction="mean")(
-                        out_vf_full, gt_vf_full
-                    )
-                elif vf_loss_type == "SmoothL1":
-                    loss_dict["loss_vf_full"] = nn.SmoothL1Loss(reduction="mean")(
-                        out_vf_full, gt_vf_full
-                    )
-                elif vf_loss_type == "L1+Cos":
-                    loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
-                        out_vf_full, gt_vf_full
-                    ) + _cosine_similarity_loss_vf(out_vf_full, gt_vf_full)
                 else:
                     raise ValueError(vf_loss_type)
             loss_dict["loss_vf_full"] *= loss_cfg.FULL_VF_LW
@@ -1067,17 +1118,14 @@ def build_model_optimizer(cfg, is_test=False):
     return model, optimizer
 
 
-def _cosine_similarity_loss_vf(out_vf: torch.Tensor, gt_vf: torch.Tensor, no_offset=True):
-    b, c, w, h = out_vf.shape
-    reshape_out_vf = out_vf.reshape(b, c // 2, 2, w, h)
-    reshape_gt_vf = gt_vf.reshape(b, c // 2, 2, w, h)
+def _cosine_similarity_loss_vf(
+    out_vf: torch.Tensor, gt_vf: torch.Tensor, no_offset=True
+):
+    b, c, _, w, h = out_vf.shape
 
-    num_foreground_pix = torch.logical_or(
-        reshape_gt_vf[:, :, 0, :, :] != 0,
-        reshape_gt_vf[:, :, 1, :, :] != 0
-    ).sum()
-
-    cs_vf = F.cosine_similarity(reshape_out_vf, reshape_gt_vf, dim=2)  # b, c//2, w, h
+    # without "detach()" may produce "RuntimeError: isDifferentiableType(variable.scalar_type()) INTERNAL ASSERT FAILED"
+    num_foreground_pix = torch.count_nonzero(gt_vf.detach()).item()
+    cs_vf = F.cosine_similarity(out_vf, gt_vf, dim=2)  # b, c, w, h
 
     if no_offset:
         return 1 - cs_vf.sum() / num_foreground_pix

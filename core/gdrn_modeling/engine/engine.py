@@ -328,17 +328,19 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     roi_cams=batch.get("roi_cam", None),
                     roi_whs=batch.get("roi_wh", None),
                     roi_centers=batch.get("roi_center", None),
+                    roi_scale=batch.get("roi_scale", None),
                     resize_ratios=batch.get("resize_ratio", None),
                     roi_coord_2d=batch.get("roi_coord_2d", None),
                     roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
                     roi_extents=batch.get("roi_extent", None),
+                    fps_pts=batch.get("fps", None),
                     do_loss=True,
                     loss_mode=this_iter_data_mode,
                 )
                 losses = sum(loss_dict.values())
                 assert torch.isfinite(losses).all(), loss_dict
             if comm.is_main_process():
-                log_first_n(logging.INFO, "iteration {} forward finished.".format(iteration), n=2)
+                log_first_n(logging.INFO, "iteration {} forward finished.".format(iteration), n=0)
 
             loss_dict_reduced = {k: v.item() for k, v in comm.reduce_dict(loss_dict).items()}
             losses_reduced = sum(loss for loss in loss_dict_reduced.values())

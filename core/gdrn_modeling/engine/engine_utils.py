@@ -41,6 +41,7 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
         batch["roi_center"] = torch.stack([d["bbox_center"] for d in data], dim=0).to(
             device=device, dtype=torch.float32, non_blocking=True
         )
+        batch["roi_scale"] = torch.tensor([d["scale"] for d in data], device=device, dtype=torch.float32)
         batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(device, non_blocking=True)
         batch["resize_ratio"] = torch.tensor([d["resize_ratio"] for d in data]).to(
             device=device, dtype=torch.float32, non_blocking=True
@@ -55,6 +56,7 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
         "roi_xyz", "roi_xyz_bin",
         "roi_mask_trunc", "roi_mask_visib", "roi_mask_obj", "roi_mask_full",
         "roi_vf_visib", "roi_vf_full",
+        "fps",
         "roi_region",
         "ego_rot", "trans",
         "roi_points",
