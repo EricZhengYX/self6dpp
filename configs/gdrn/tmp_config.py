@@ -63,11 +63,11 @@ SOLVER = dict(
 )
 
 DATASETS = dict(
-    TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train, lmo_test, lm_real_ape_test
-    TEST=("lmo_test",),
+    TRAIN=("lm_pbr_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train, lmo_test, lm_real_ape_test
+    TEST=("lmo_test", "lm_real_ape_test",),
     DET_FILES_TEST=(
         "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
-        # "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
+        "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
     ),
 )
 
@@ -128,7 +128,7 @@ MODEL = dict(
             # region loss -------------------------
             REGION_LOSS_TYPE="CE",  # CE
             REGION_LOSS_MASK_GT="visib",  # trunc | visib | obj
-            REGION_LW=1.0,
+            REGION_LW=0.05,
             # vf loss ---------------------------
             VF_LOSS_TYPE="L1+Cos",
             VIS_VF_LW=1.0,
@@ -139,7 +139,7 @@ MODEL = dict(
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM
-            PM_LW=1.0,
+            PM_LW=10.0,
             # centroid loss -------
             CENTROID_LOSS_TYPE="L1",
             CENTROID_LW=1.0,

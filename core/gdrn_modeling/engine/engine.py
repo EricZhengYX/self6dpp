@@ -399,7 +399,8 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
             # periodically do/save evaluations
             if (
                 cfg.TEST.EVAL_PERIOD > 0
-                and epoch % cfg.TEST.EVAL_PERIOD == 0
+                # and epoch > 1
+                and (epoch - 1) % cfg.TEST.EVAL_PERIOD == 0
                 and iteration % iters_per_epoch == 0
                 and iteration != max_iter - 1
             ):

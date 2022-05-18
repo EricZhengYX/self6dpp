@@ -556,7 +556,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
                         masked_out_vf_vis, masked_gt_vf_visib
                     ) + _cosine_similarity_loss_vf(
-                        masked_out_vf_vis, masked_gt_vf_visib
+                        masked_out_vf_vis, masked_gt_vf_visib, _mask
                     )
                 else:
                     raise ValueError(vf_loss_type)
@@ -570,7 +570,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
                     loss_dict["loss_vf_full"] = nn.L1Loss(reduction="mean")(
                         masked_out_vf_full, masked_gt_vf_full
                     ) + _cosine_similarity_loss_vf(
-                        masked_out_vf_full, masked_gt_vf_full
+                        masked_out_vf_full, masked_gt_vf_full, _mask
                     )
                 else:
                     raise ValueError(vf_loss_type)
@@ -621,7 +621,7 @@ plt.show()
 
                 loss_dict["loss_vf_rt"] = nn.L1Loss(reduction="mean")(
                     masked_out_vf_full, masked_rt_vf_full
-                ) + _cosine_similarity_loss_vf(masked_out_vf_full, masked_rt_vf_full)
+                ) + _cosine_similarity_loss_vf(masked_out_vf_full, masked_rt_vf_full, _mask)
                 loss_dict["loss_vf_rt"] *= loss_cfg.VF_RT_LW
         # endregion
 
@@ -971,7 +971,7 @@ plt.show()
                     loss_dict["loss_vf_vis"] = nn.L1Loss(reduction="mean")(
                         masked_out_vf_vis, masked_gt_vf_visib
                     ) + _cosine_similarity_loss_vf(
-                        masked_out_vf_vis, masked_gt_vf_visib
+                        masked_out_vf_vis, masked_gt_vf_visib, _mask
                     )
                 else:
                     raise ValueError(vf_loss_type)
@@ -985,7 +985,7 @@ plt.show()
                     loss_dict["loss_vf_full"] = nn.L1Loss(reduction="mean")(
                         masked_out_vf_full, masked_gt_vf_full
                     ) + _cosine_similarity_loss_vf(
-                        masked_out_vf_full, masked_gt_vf_full
+                        masked_out_vf_full, masked_gt_vf_full, _mask
                     )
                 else:
                     raise ValueError(vf_loss_type)
@@ -1119,15 +1119,17 @@ def build_model_optimizer(cfg, is_test=False):
 
 
 def _cosine_similarity_loss_vf(
-    out_vf: torch.Tensor, gt_vf: torch.Tensor, no_offset=True
+    out_vf: torch.Tensor, gt_vf: torch.Tensor, mask
 ):
     b, c, _, w, h = out_vf.shape
 
     # without "detach()" may produce "RuntimeError: isDifferentiableType(variable.scalar_type()) INTERNAL ASSERT FAILED"
-    num_foreground_pix = torch.count_nonzero(gt_vf.detach()).item()
+    # num_foreground_pix = torch.count_nonzero(gt_vf.detach()).item()
+    num_foreground_pix = torch.count_nonzero(mask.detach()).item() * c
     cs_vf = F.cosine_similarity(out_vf, gt_vf, dim=2)  # b, c, w, h
 
-    if no_offset:
-        return 1 - cs_vf.sum() / num_foreground_pix
-    else:
-        return 1 - cs_vf.mean()
+    minus_cs_vf = torch.ones_like(cs_vf) - cs_vf
+
+    masked_minus_cs_vf = mask.squeeze(2) * minus_cs_vf
+
+    return masked_minus_cs_vf.sum() / num_foreground_pix
