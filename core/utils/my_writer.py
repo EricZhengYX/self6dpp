@@ -117,7 +117,7 @@ class MyCommonMetricPrinter(EventWriter):
     yourself.
     """
 
-    def __init__(self, max_iter: Optional[int] = None, window_size: int = 20):
+    def __init__(self, max_iter: Optional[int] = None, eval_interval: Optional[int] = None, ckpt_interval: Optional[int] = None, window_size: int = 20):
         """
         Args:
             max_iter (int): the maximum number of iterations to train.
@@ -125,24 +125,41 @@ class MyCommonMetricPrinter(EventWriter):
         """
         self.logger = logging.getLogger(__name__)
         self._max_iter = max_iter
+        self._eval_interval = eval_interval if isinstance(eval_interval, int) and eval_interval > 0 else None
+        self._ckpt_interval = ckpt_interval if isinstance(eval_interval, int) and eval_interval > 0 else None
         self._window_size = window_size
         self._last_write = None  # (step, time) of last call to write(). Used to compute ETA
 
     def _get_eta(self, storage) -> Optional[str]:
-        if self._max_iter is None:
+        return self._get_eta_meta(self._max_iter, storage, "eta_seconds")
+
+    def _get_eta_next_eval(self, storage) -> Optional[str]:
+        if self._eval_interval is None:
+            return None
+        next_eval_iter = int((storage.iter // self._eval_interval + 1) * self._eval_interval)
+        return self._get_eta_meta(next_eval_iter, storage, "next_eval_ata_seconds")
+
+    def _get_eta_next_ckpt(self, storage) -> Optional[str]:
+        if self._ckpt_interval is None:
+            return None
+        next_ckpt_iter = int((storage.iter // self._ckpt_interval + 1) * self._ckpt_interval)
+        return self._get_eta_meta(next_ckpt_iter, storage, "next_ckpt_ata_seconds")
+
+    def _get_eta_meta(self, target_iter, storage, put_scalar_name) -> Optional[str]:
+        if target_iter is None:
             return ""
         iteration = storage.iter
         try:
             # eta_seconds = storage.history("time").median(1000) * (self._max_iter - iteration - 1)
-            eta_seconds = storage.history("time").avg(1000) * (self._max_iter - iteration - 1)
-            storage.put_scalar("eta_seconds", eta_seconds, smoothing_hint=False)
+            eta_seconds = storage.history("time").avg(1000) * (target_iter - iteration - 1)
+            storage.put_scalar(put_scalar_name, eta_seconds, smoothing_hint=False)
             return str(datetime.timedelta(seconds=int(eta_seconds)))
         except KeyError:
             # estimate eta on our own - more noisy
             eta_string = None
             if self._last_write is not None:
                 estimate_iter_time = (time.perf_counter() - self._last_write[1]) / (iteration - self._last_write[0])
-                eta_seconds = estimate_iter_time * (self._max_iter - iteration - 1)
+                eta_seconds = estimate_iter_time * (target_iter - iteration - 1)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
             self._last_write = (iteration, time.perf_counter())
             return eta_string
@@ -178,6 +195,8 @@ class MyCommonMetricPrinter(EventWriter):
             lr = "N/A"
 
         eta_string = self._get_eta(storage)
+        eta_string_next_eval = self._get_eta_next_eval(storage)
+        eta_string_next_ckpt = self._get_eta_next_ckpt(storage)
 
         if torch.cuda.is_available():
             max_mem_mb = torch.cuda.max_memory_allocated() / 1024.0 / 1024.0
@@ -195,12 +214,14 @@ class MyCommonMetricPrinter(EventWriter):
 
         # NOTE: max_mem is parsed by grep in "dev/parse_results.sh"
         self.logger.info(
-            """{eta}{epoch}iter: {iter}/{max_iter}[{percent:.1f}%] \
+            """{eta}{eta_next_eval}{eta_next_ckpt}{epoch}iter: {iter}/{max_iter}[{percent:.1f}%] \
 {time}{data_time}lr: {lr} {memory} \
 {total_grad_norm} \
 {losses} \
 """.format(
                 eta=f"eta: {eta_string}  " if eta_string else "",
+                eta_next_eval=f"next eval: {eta_string_next_eval}  " if eta_string_next_eval else "",
+                eta_next_ckpt=f"next ckpt: {eta_string_next_ckpt}  " if eta_string_next_ckpt else "",
                 epoch=epoch_str,
                 iter=iteration,
                 max_iter=self._max_iter,

@@ -437,7 +437,7 @@ def batch_data_self(cfg, data, model_teacher=None, device="cuda", phase="train")
     # get pose related pseudo labels from teacher model --------------------------
     with torch.no_grad():
         out_dict = model_teacher(
-            batch["roi_img"],
+            batch["roi_img"],  # TODO: why here isnt roi_gt_img?
             roi_classes=batch["roi_cls"],
             roi_cams=batch["roi_cam"],
             roi_whs=batch["roi_wh"],
@@ -616,6 +616,29 @@ def batch_data_test_self(cfg, data, device="cuda"):
             batch[key] = list(itertools.chain(*[d[key] for d in data]))
 
     return batch
+
+
+def my_get_DIBR_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=None):
+    from lib.dr_utils.dib_renderer_x.renderer_dibr import load_ply_models, Renderer_dibr
+    model_dir = data_ref.model_dir
+    obj_ids = [data_ref.obj2id[_obj] for _obj in obj_names]
+    model_paths = [osp.join(model_dir, "obj_{:06d}.ply".format(obj_id)) for obj_id in obj_ids]
+
+    texture_paths = None
+    if data_ref.texture_paths is not None:
+        texture_paths = [osp.join(model_dir, "obj_{:06d}.png".format(obj_id)) for obj_id in obj_ids]
+    models = load_ply_models(
+        obj_paths=model_paths,  # model_paths=model_paths,
+        texture_paths=texture_paths,
+        vertex_scale=data_ref.vertex_scale,
+        tex_resize=True,  # to reduce gpu memory usage
+        width=512,
+        height=512,
+    )
+    ren_dibr = Renderer_dibr(
+        height=cfg.RENDERER.DIBR.HEIGHT, width=cfg.RENDERER.DIBR.WIDTH, mode=cfg.RENDERER.DIBR.MODE
+    )
+    return models, ren_dibr
 
 
 def get_DIBR_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=None):

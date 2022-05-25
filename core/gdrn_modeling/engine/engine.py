@@ -35,13 +35,24 @@ from core.utils import solver_utils
 from core.utils.utils import eval_result_to_markdown
 import core.utils.my_comm as comm
 from core.utils.my_checkpoint import MyCheckpointer
-from core.utils.my_writer import MyCommonMetricPrinter, MyJSONWriter, MyTensorboardXWriter
+from core.utils.my_writer import (
+    MyCommonMetricPrinter,
+    MyJSONWriter,
+    MyTensorboardXWriter,
+)
 from core.utils.utils import get_emb_show
 from core.utils.data_utils import denormalize_image
-from core.gdrn_modeling.datasets.data_loader import build_gdrn_train_loader, build_gdrn_test_loader
+from core.gdrn_modeling.datasets.data_loader import (
+    build_gdrn_train_loader,
+    build_gdrn_test_loader,
+)
 
 from .engine_utils import batch_data, get_out_coor, get_out_mask
-from .gdrn_evaluator import gdrn_inference_on_dataset, GDRN_Evaluator, gdrn_save_result_of_dataset
+from .gdrn_evaluator import (
+    gdrn_inference_on_dataset,
+    GDRN_Evaluator,
+    gdrn_save_result_of_dataset,
+)
 from .gdrn_custom_evaluator import GDRN_EvaluatorCustom
 import ref
 
@@ -94,14 +105,22 @@ def get_evaluator(cfg, dataset_name, output_folder=None):
     dataset_meta = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
     train_obj_names = dataset_meta.objs
     if evaluator_type == "bop":
-        gdrn_eval_cls = GDRN_Evaluator if cfg.VAL.get("USE_BOP", False) else GDRN_EvaluatorCustom
+        gdrn_eval_cls = (
+            GDRN_Evaluator if cfg.VAL.get("USE_BOP", False) else GDRN_EvaluatorCustom
+        )
         return gdrn_eval_cls(
-            cfg, dataset_name, distributed=_distributed, output_dir=output_folder, train_objs=train_obj_names
+            cfg,
+            dataset_name,
+            distributed=_distributed,
+            output_dir=output_folder,
+            train_objs=train_obj_names,
         )
 
     if len(evaluator_list) == 0:
         raise NotImplementedError(
-            "no Evaluator for the dataset {} with the type {}".format(dataset_name, evaluator_type)
+            "no Evaluator for the dataset {} with the type {}".format(
+                dataset_name, evaluator_type
+            )
         )
     if len(evaluator_list) == 1:
         return evaluator_list[0]
@@ -116,11 +135,19 @@ def do_save_results(cfg, model, epoch=None, iteration=None):
 
     for dataset_name in cfg.DATASETS.TEST:
         if epoch is not None and iteration is not None:
-            save_out_dir = osp.join(cfg.OUTPUT_DIR, f"inference_epoch_{epoch}_iter_{iteration}", dataset_name)
+            save_out_dir = osp.join(
+                cfg.OUTPUT_DIR,
+                f"inference_epoch_{epoch}_iter_{iteration}",
+                dataset_name,
+            )
         else:
-            save_out_dir = osp.join(cfg.OUTPUT_DIR, f"inference_{model_name}", dataset_name)
+            save_out_dir = osp.join(
+                cfg.OUTPUT_DIR, f"inference_{model_name}", dataset_name
+            )
 
-        data_loader = build_gdrn_test_loader(cfg, dataset_name, train_objs=train_obj_names)
+        data_loader = build_gdrn_test_loader(
+            cfg, dataset_name, train_objs=train_obj_names
+        )
         gdrn_save_result_of_dataset(
             cfg,
             model,
@@ -137,12 +164,22 @@ def do_test(cfg, model, epoch=None, iteration=None):
     model_name = osp.basename(cfg.MODEL.WEIGHTS).split(".")[0]
     for dataset_name in cfg.DATASETS.TEST:
         if epoch is not None and iteration is not None:
-            eval_out_dir = osp.join(cfg.OUTPUT_DIR, f"inference_epoch_{epoch}_iter_{iteration}", dataset_name)
+            eval_out_dir = osp.join(
+                cfg.OUTPUT_DIR,
+                f"inference_epoch_{epoch}_iter_{iteration}",
+                dataset_name,
+            )
         else:
-            eval_out_dir = osp.join(cfg.OUTPUT_DIR, f"inference_{model_name}", dataset_name)
+            eval_out_dir = osp.join(
+                cfg.OUTPUT_DIR, f"inference_{model_name}", dataset_name
+            )
         evaluator = get_evaluator(cfg, dataset_name, eval_out_dir)
-        data_loader = build_gdrn_test_loader(cfg, dataset_name, train_objs=evaluator.train_objs)
-        results_i = gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=cfg.TEST.AMP_TEST)
+        data_loader = build_gdrn_test_loader(
+            cfg, dataset_name, train_objs=evaluator.train_objs
+        )
+        results_i = gdrn_inference_on_dataset(
+            cfg, model, data_loader, evaluator, amp_test=cfg.TEST.AMP_TEST
+        )
         results[dataset_name] = results_i
         # if comm.is_main_process():
         #     logger.info("Evaluation results for {} in csv format:".format(dataset_name))
@@ -209,10 +246,16 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
     logger.info("iters per epoch : {}".format(iters_per_epoch))
     logger.info("total iters     : {}".format(max_iter))
 
-    bs_ref = cfg.SOLVER.get("REFERENCE_BS", 64)  # nominal batch size =========================
-    accumulate_iter = max(round(bs_ref / cfg.SOLVER.IMS_PER_BATCH), 1)  # accumulate loss before optimizing
+    bs_ref = cfg.SOLVER.get(
+        "REFERENCE_BS", 64
+    )  # nominal batch size =========================
+    accumulate_iter = max(
+        round(bs_ref / cfg.SOLVER.IMS_PER_BATCH), 1
+    )  # accumulate loss before optimizing
     # NOTE: update lr every accumulate_iter
-    scheduler = solver_utils.build_lr_scheduler(cfg, optimizer, total_iters=max_iter // accumulate_iter)
+    scheduler = solver_utils.build_lr_scheduler(
+        cfg, optimizer, total_iters=max_iter // accumulate_iter
+    )
 
     AMP_ON = cfg.SOLVER.AMP.ENABLED
     logger.info(f"AMP enabled: {AMP_ON}")
@@ -227,7 +270,12 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
         gradscaler=grad_scaler,
         save_to_disk=comm.is_main_process(),
     )
-    start_iter = checkpointer.resume_or_load(cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
+    start_iter = (
+        checkpointer.resume_or_load(cfg.MODEL.WEIGHTS, resume=resume).get(
+            "iteration", -1
+        )
+        + 1
+    )
 
     # Exponential moving average (NOTE: initialize ema after loading weights) ========================
     if comm.is_main_process() and cfg.MODEL.EMA.ENABLED:
@@ -248,7 +296,9 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
         hvd.broadcast_parameters(model.state_dict(), root_rank=0)
         hvd.broadcast_optimizer_state(optimizer, root_rank=0)
         # Horovod: (optional) compression algorithm.
-        compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+        compression = (
+            hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+        )
         optimizer = hvd.DistributedOptimizer(
             optimizer,
             named_parameters=model.named_parameters(),
@@ -263,12 +313,19 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
     periodic_checkpointer = PeriodicCheckpointer(
         checkpointer, ckpt_period, max_iter=max_iter, max_to_keep=cfg.SOLVER.MAX_TO_KEEP
     )
+    eval_period = cfg.TEST.EVAL_PERIOD * iters_per_epoch
 
     # build writers ==============================================
-    tbx_event_writer = get_tbx_event_writer(cfg.OUTPUT_DIR, backup=not cfg.get("RESUME", False))
+    tbx_event_writer = get_tbx_event_writer(
+        cfg.OUTPUT_DIR, backup=not cfg.get("RESUME", False)
+    )
     tbx_writer = tbx_event_writer._writer  # NOTE: we want to write some non-scalar data
     writers = (
-        [MyCommonMetricPrinter(max_iter), MyJSONWriter(osp.join(cfg.OUTPUT_DIR, "metrics.json")), tbx_event_writer]
+        [
+            MyCommonMetricPrinter(max_iter, eval_period, ckpt_period),
+            MyJSONWriter(osp.join(cfg.OUTPUT_DIR, "metrics.json")),
+            tbx_event_writer,
+        ]
         if comm.is_main_process()
         else []
     )
@@ -284,7 +341,7 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
             epoch = iteration // iters_per_epoch + 1  # epoch start from 1
             storage.put_scalar("epoch", epoch, smoothing_hint=False)
 
-            this_iter_data_mode = ''  # 'pose' | 'geo'
+            this_iter_data_mode = ""  # 'pose' | 'geo'
             if np.random.rand() < train_2_ratio:
                 data_loader_2.dataset.step()
                 data = next(data_loader_2_iter)
@@ -340,9 +397,15 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 losses = sum(loss_dict.values())
                 assert torch.isfinite(losses).all(), loss_dict
             if comm.is_main_process():
-                log_first_n(logging.INFO, "iteration {} forward finished.".format(iteration), n=0)
+                log_first_n(
+                    logging.INFO,
+                    "iteration {} forward finished.".format(iteration),
+                    n=0,
+                )
 
-            loss_dict_reduced = {k: v.item() for k, v in comm.reduce_dict(loss_dict).items()}
+            loss_dict_reduced = {
+                k: v.item() for k, v in comm.reduce_dict(loss_dict).items()
+            }
             losses_reduced = sum(loss for loss in loss_dict_reduced.values())
             if comm.is_main_process():
                 storage.put_scalars(total_loss=losses_reduced, **loss_dict_reduced)
@@ -372,19 +435,31 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     # set nan grads to 0
                     for param in model.parameters():
                         if param.grad is not None:
-                            nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
+                            nan_to_num(
+                                param.grad,
+                                nan=0,
+                                posinf=1e5,
+                                neginf=-1e5,
+                                out=param.grad,
+                            )
                     total_norm = nn.utils.clip_grad_norm_(
                         model.parameters(), max_norm=clip_grad
                     )
                     optimizer.step()
 
             if comm.is_main_process():
-                log_first_n(logging.INFO, "iteration {} backward finished.".format(iteration), n=2)
+                log_first_n(
+                    logging.INFO,
+                    "iteration {} backward finished.".format(iteration),
+                    n=2,
+                )
             if iteration % accumulate_iter == 0:
                 optimizer.zero_grad(set_to_none=True)
                 if ema is not None:
                     ema.update(model)
-                storage.put_scalar("lr", optimizer.param_groups[0]["lr"], smoothing_hint=False)
+                storage.put_scalar(
+                    "lr", optimizer.param_groups[0]["lr"], smoothing_hint=False
+                )
                 scheduler.step()
 
             # recording losses
@@ -423,7 +498,9 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 comm.synchronize()
 
             if iteration - start_iter > 5 and (
-                (iteration + 1) % cfg.TRAIN.PRINT_FREQ == 0 or iteration == max_iter - 1 or iteration < 100
+                (iteration + 1) % cfg.TRAIN.PRINT_FREQ == 0
+                or iteration == max_iter - 1
+                or iteration < 100
             ):
                 for writer in writers:
                     writer.write()
@@ -432,7 +509,11 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     with torch.no_grad():
                         vis_i = 0
                         roi_img_vis = batch["roi_img"][vis_i].cpu().numpy()
-                        roi_img_vis = denormalize_image(roi_img_vis, cfg).transpose(1, 2, 0).astype("uint8")
+                        roi_img_vis = (
+                            denormalize_image(roi_img_vis, cfg)
+                            .transpose(1, 2, 0)
+                            .astype("uint8")
+                        )
                         tbx_writer.add_image("input_image", roi_img_vis, iteration)
 
                         out_coor_x = out_dict["coor_x"].detach()
@@ -444,7 +525,9 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                         out_xyz_vis = get_emb_show(out_xyz_vis)
                         tbx_writer.add_image("out_xyz", out_xyz_vis, iteration)
 
-                        gt_xyz_vis = batch["roi_xyz"][vis_i].cpu().numpy().transpose(1, 2, 0)
+                        gt_xyz_vis = (
+                            batch["roi_xyz"][vis_i].cpu().numpy().transpose(1, 2, 0)
+                        )
                         gt_xyz_vis = get_emb_show(gt_xyz_vis)
                         tbx_writer.add_image("gt_xyz", gt_xyz_vis, iteration)
 
@@ -493,7 +576,9 @@ def vis_train_data(data, obj_names, cfg):
         erode_mask_obj = cv2.erode(roi_mask_obj.astype("uint8"), kernel, iterations=1)
 
         roi_xyz = d["roi_xyz"].numpy().transpose(1, 2, 0)
-        roi_xyz_show = get_emb_show(roi_xyz) * erode_mask_obj[:, :, None].astype("float32")
+        roi_xyz_show = get_emb_show(roi_xyz) * erode_mask_obj[:, :, None].astype(
+            "float32"
+        )
 
         coord2d = d["roi_coord_2d"].numpy().transpose(1, 2, 0)
         roi_h, roi_w = coord2d.shape[:2]

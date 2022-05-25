@@ -1,4 +1,4 @@
-import os
+import re
 import os.path as osp
 
 import numpy as np
@@ -6,10 +6,14 @@ from . import DIBRenderer
 import torch
 from tqdm import tqdm
 import cv2
+import mmcv
 
+from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT, LM_13_OBJECTS
 from core.utils.pose_utils import quat2mat_torch
 from lib.pysixd import inout, misc
 from lib.dr_utils.rep import TriangleMesh
+
+preload_models_dir = "models_ape_benchvise_camera_can_cat_driller_duck_eggbox_glue_holepuncher_iron_lamp_phone.pkl"
 
 
 def load_ply_models(
@@ -29,6 +33,21 @@ def load_ply_models(
     Returns:
         a list of dicts
     """
+
+    abs_preload_models_dir = "/".join(
+        obj_paths[0].split("/")[:-1] + [preload_models_dir]
+    )
+    if osp.exists(abs_preload_models_dir):
+        all_models = mmcv.load(abs_preload_models_dir)
+        selected_file_names = [re.findall("obj_\d+", obj_path)[0] for obj_path in obj_paths]
+        selected_cls = [
+            LM_DICT[int(fn[4:])]
+            for fn in selected_file_names
+        ]
+        return [
+            all_models[LM_13_OBJECTS.index(cls)] for cls in selected_cls
+        ]
+
     assert all([".obj" in _path for _path in obj_paths])
     models = []
     for i, obj_path in enumerate(tqdm(obj_paths)):

@@ -71,7 +71,9 @@ class TopDownDoubleMaskDoubleVFXyzRegionHead(nn.Module):
                         bias=False,
                     )
                 )
-                self.features.append(get_norm(norm, feat_dim, num_gn_groups=num_gn_groups))
+                self.features.append(
+                    get_norm(norm, feat_dim, num_gn_groups=num_gn_groups)
+                )
                 self.features.append(get_nn_act_func(act))
             elif up_type == "bilinear":
                 self.features.append(nn.UpsamplingBilinear2d(scale_factor=2))
@@ -213,8 +215,8 @@ class TopDownDoubleMaskDoubleVFXyzRegionHead(nn.Module):
             raw_vis_vf = out[:, sum_dim : sum_dim + (vf_dim // 2), :, :]
             vis_vf = _post_process_vf(raw_vis_vf)
 
-            sum_dim += (vf_dim // 2)
-            raw_full_vf = out[:, sum_dim :, :, :]
+            sum_dim += vf_dim // 2
+            raw_full_vf = out[:, sum_dim:, :, :]
             full_vf = _post_process_vf(raw_full_vf)
 
             bs, c, h, w = xyz.shape
@@ -266,6 +268,7 @@ def _post_process_vf(raw_vf: torch.Tensor):
     """
     b, c, w, h = raw_vf.shape
     vf_reshape = raw_vf.reshape(b, c // 2, 2, w, h)
-    vf_softmax = F.softmax(vf_reshape, dim=2)
-    vf_sqrt = torch.sqrt(vf_softmax)
-    return vf_sqrt  # b*(c//2)*2*w*h
+    vf_reshape = vf_reshape / (torch.norm(vf_reshape, dim=2, keepdim=True) + 1e-4)
+    # vf_softmax = F.softmax(vf_reshape, dim=2)
+    # vf_sqrt = torch.sqrt(vf_softmax)
+    return vf_reshape  # b*(c//2)*2*w*h

@@ -1,7 +1,8 @@
-_base_ = ["../_base_/gdrn_base.py"]
+_base_ = ["../_base_/self6dpp_base.py"]
 
-OUTPUT_DIR = "output/gdrn/lm_pbr/my_config/ape"
+OUTPUT_DIR = "output/self6dpp/self_my_config/ape"
 INPUT = dict(
+    WITH_DEPTH=False,
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
     CHANGE_BG_PROB=0.,  # 0.5
@@ -49,35 +50,66 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=2,  # 24
+    IMS_PER_BATCH=2,  # 6, maybe need to be < 24
     TOTAL_EPOCHS=100,
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
-    # REL_STEPS=(0.3125, 0.625, 0.9375),
     OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-4, weight_decay=0),
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
-    WARMUP_ITERS=1000,
-    CLIP_GRAD=100,
+    WARMUP_ITERS=100,  # NOTE: only real data, iterations are very small
+    CLIP_GRADIENTS=dict(ENABLED=True, CLIP_TYPE="full_model", CLIP_VALUE=100),
 )
 
 DATASETS = dict(
-    TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train, lmo_test, lm_real_ape_test
+    TRAIN=("lm_real_ape_train",),  # real data
+    TRAIN2=("lm_pbr_ape_train",),  # synthetic data
+    TRAIN2_RATIO=0.0,
     TEST=("lm_real_ape_test",),
+    # for self-supervised training
+    DET_FILES_TRAIN=(
+        "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lm_13_train.json",
+    ),
+    DET_THR_TRAIN=0.5,
     DET_FILES_TEST=(
-        # "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
         "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
     ),
 )
 
+RENDERER = dict(
+    ENABLE=False,
+    DIFF_RENDERER="new_DIBR",
+)  # DIBR | dibr | new_DIBR
+
 MODEL = dict(
+    # synthetically trained model
+    WEIGHTS="output/model_final_wo_optim-e88786e4.pth",
+    # init
+    # ad10    rete5    te2
+    # 50.86   98.57    91.81
+    REFINER_WEIGHTS="",
+    FREEZE_BN=True,
+    SELF_TRAIN=True,  # whether to do self-supervised training
+    WITH_REFINER=False,  # whether to use refiner
+    LOAD_DETS_TRAIN=True,  # NOTE: load detections for self-train
+    LOAD_DETS_TRAIN_WITH_POSE=True,  # NOTE: load pose_refine
     LOAD_DETS_TEST=True,
-    PIXEL_MEAN=[0.0, 0.0, 0.0],
-    PIXEL_STD=[255.0, 255.0, 255.0],
+    EMA=dict(
+        ENABLED=True,
+        INIT_CFG=dict(decay=0.999, updates=0),  # epoch-based
+        UPDATE_FREQ=10,  # update the mean teacher every n epochs
+    ),
     POSE_NET=dict(
-        NAME="GDRN_double_mask_double_vf",  # GDRN_double_mask_double_vf, GDRN_double_mask
-        XYZ_ONLINE=False,
+        NAME="GDRN_double_mask",  # used module file name  GDRN_double_mask_double_vf
+        # NOTE: for self-supervised training phase, use offline labels should be more accurate
+        XYZ_ONLINE=False,  # rendering xyz online
+        XYZ_BP=True,  # calculate xyz from depth by backprojection
+        NUM_CLASSES=13,
+        USE_MTL=False,  # uncertainty multi-task weighting
+        INPUT_RES=256,
+        OUTPUT_RES=64,
+        ## backbone
         BACKBONE=dict(
             FREEZE=False,
             PRETRAINED="timm",
@@ -89,11 +121,11 @@ MODEL = dict(
                 out_indices=(4,),
             ),
         ),
-        ## geo head: Mask, XYZ, Region, VF
+        ## geo head: Mask, XYZ, Region
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(
-                type="TopDownDoubleMaskDoubleVFXyzRegionHead",  # TopDownDoubleMaskXyzRegionHead, TopDownDoubleMaskDoubleVFXyzRegionHead
+                type="TopDownDoubleMaskXyzRegionHead",  # TopDownDoubleMaskDoubleVFXyzRegionHead TopDownDoubleMaskXyzRegionHead
                 in_dim=2048,  # this is num out channels of backbone conv feature
             ),
             NUM_REGIONS=64,
@@ -104,11 +136,11 @@ MODEL = dict(
             INIT_CFG=dict(
                 norm="GN",
                 act="gelu",
-                type="ConvPnPNetAll",
+                type="ConvPnPNet",  # ConvPnPNet ConvPnPNetAll
             ),
             REGION_ATTENTION=True,
             WITH_2D_COORD=True,
-            MASK_ATTENTION="concat",
+            MASK_ATTENTION="none",  # concat none
             WITH_VF="both",
             ROT_TYPE="allo_rot6d",
             TRANS_TYPE="centroid_z",
@@ -122,13 +154,10 @@ MODEL = dict(
             MASK_LOSS_TYPE="BCE",  # L1 | BCE | CE
             MASK_LOSS_GT="trunc",  # trunc | visib | gt
             MASK_LW=1.0,
-            # full mask loss ---------------------------
-            FULL_MASK_LOSS_TYPE="BCE",  # L1 | BCE | CE
-            FULL_MASK_LW=1.0,
             # region loss -------------------------
             REGION_LOSS_TYPE="CE",  # CE
             REGION_LOSS_MASK_GT="visib",  # trunc | visib | obj
-            REGION_LW=0.05,
+            REGION_LW=1.0,
             # vf loss ---------------------------
             VF_LOSS_TYPE="L1+Cos",
             VIS_VF_LW=1.0,
@@ -139,13 +168,40 @@ MODEL = dict(
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM
-            PM_LW=10.0,
+            PM_LW=1.0,
             # centroid loss -------
             CENTROID_LOSS_TYPE="L1",
             CENTROID_LW=1.0,
             # z loss -----------
             Z_LOSS_TYPE="L1",
             Z_LW=1.0,
+        ),
+        SELF_LOSS_CFG=dict(
+            # LAB space loss ------------------
+            LAB_NO_L=True,
+            LAB_LW=0.2,
+            # MS-SSIM loss --------------------
+            MS_SSIM_LW=1.0,
+            # perceptual loss -----------------
+            PERCEPT_LW=0.15,
+            # mask loss (init, ren) -----------------------
+            MASK_INIT_REN_LOSS_TYPE="RW_BCE",
+            # MASK_INIT_REN_LOSS_TYPE="dice",
+            MASK_INIT_REN_LW=1.0,
+            # depth-based geometric loss ------
+            GEOM_LOSS_TYPE="chamfer",  # L1, chamfer
+            GEOM_LW=0.0,  #  NOTE
+            CHAMFER_CENTER_LW=0.0,
+            CHAMFER_DIST_THR=0.5,
+            # refiner-based loss --------------
+            REFINE_LW=0.0,
+            # xyz loss (init, ren)
+            XYZ_INIT_REN_LOSS_TYPE="L1",  # L1 | CE_coor (for cls)
+            XYZ_INIT_REN_LW=0.0,
+            # point matching loss using pseudo pose ---------------------------
+            SELF_PM_CFG=dict(
+                loss_weight=10.0,  # NOTE: >0 to enable this loss
+            ),
         ),
     ),
 )
