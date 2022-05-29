@@ -13,7 +13,8 @@ from core.utils.pose_utils import quat2mat_torch
 from lib.pysixd import inout, misc
 from lib.dr_utils.rep import TriangleMesh
 
-preload_models_dir = "models_ape_benchvise_camera_can_cat_driller_duck_eggbox_glue_holepuncher_iron_lamp_phone.pkl"
+# preload_models_dir = "models_ape_benchvise_camera_can_cat_driller_duck_eggbox_glue_holepuncher_iron_lamp_phone.pkl"
+preload_models_dir = "models_s6dpp.pkl"
 
 
 def load_ply_models(
@@ -45,8 +46,13 @@ def load_ply_models(
             for fn in selected_file_names
         ]
         return [
+            all_models[cls] for cls in selected_cls
+        ]
+        '''
+        return [
             all_models[LM_13_OBJECTS.index(cls)] for cls in selected_cls
         ]
+        '''
 
     assert all([".obj" in _path for _path in obj_paths])
     models = []

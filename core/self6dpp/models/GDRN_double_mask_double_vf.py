@@ -139,34 +139,16 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             coor_z,
             region,
         ) = self.geo_head_net(conv_feat)
-        if do_loss and loss_mode == "geo":
-            # return in advance, training in geo mode
-            out_dict = {}
-            loss_dict = self.geo_loss(
-                cfg=cfg,
-                # mask
-                out_mask_vis=vis_mask,
-                out_mask_full=full_mask,
-                gt_mask_trunc=gt_mask_trunc,
-                gt_mask_visib=gt_mask_visib,
-                gt_mask_obj=gt_mask_obj,
-                gt_mask_full=gt_mask_full,
-                # vf
-                out_vf_vis=vis_vf,
-                out_vf_full=full_vf,
-                gt_vf_visib=gt_vf_visib,
-                gt_vf_full=gt_vf_full,
-                # xyz
-                out_x=coor_x,
-                out_y=coor_y,
-                out_z=coor_z,
-                gt_xyz=gt_xyz,
-                gt_xyz_bin=gt_xyz_bin,
-                # roi region
-                out_region=region,
-                gt_region=gt_region,
-            )
-            return out_dict, loss_dict
+        out_dict = {
+            "vis_mask": vis_mask,
+            "full_mask": full_mask,
+            "vis_vf": vis_vf,
+            "full_vf": full_vf,
+            "coor_x": coor_x,
+            "coor_y": coor_y,
+            "coor_z": coor_z,
+            "region": region,
+        }
 
         # region predicting R/T
         if g_head_cfg.XYZ_CLASS_AWARE:
@@ -200,6 +182,55 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
             region = region.view(bs, num_classes, self.region_out_dim, out_res, out_res)
             region = region[torch.arange(bs).to(device), roi_classes]
 
+        # masks
+        if pnp_net_cfg.MASK_ATTENTION != "none":
+            vis_mask_atten = vis_mask_prob = get_mask_prob(vis_mask, mask_loss_type=net_cfg.LOSS_CFG.MASK_LOSS_TYPE)
+            full_mask_atten = full_mask_prob = get_mask_prob(full_mask, mask_loss_type=net_cfg.LOSS_CFG.MASK_LOSS_TYPE)
+        else:
+            vis_mask_atten = vis_mask_prob = vis_mask
+            full_mask_atten = full_mask_prob = full_mask
+
+        # forward for self-supervised training # -----------------------------------------------
+        if do_self:
+            out_dict.update(
+                {
+                    "vis_mask_prob": vis_mask_prob,
+                    "full_mask_prob": full_mask_prob,
+                }
+            )
+
+        if loss_mode == "geo":
+            if do_loss:
+                # return in advance, training in geo mode
+                out_dict = {}
+                loss_dict = self.geo_loss(
+                    cfg=cfg,
+                    # mask
+                    out_mask_vis=vis_mask,
+                    out_mask_full=full_mask,
+                    gt_mask_trunc=gt_mask_trunc,
+                    gt_mask_visib=gt_mask_visib,
+                    gt_mask_obj=gt_mask_obj,
+                    gt_mask_full=gt_mask_full,
+                    # vf
+                    out_vf_vis=vis_vf,
+                    out_vf_full=full_vf,
+                    gt_vf_visib=gt_vf_visib,
+                    gt_vf_full=gt_vf_full,
+                    # xyz
+                    out_x=coor_x,
+                    out_y=coor_y,
+                    out_z=coor_z,
+                    gt_xyz=gt_xyz,
+                    gt_xyz_bin=gt_xyz_bin,
+                    # roi region
+                    out_region=region,
+                    gt_region=gt_region,
+                )
+                return out_dict, loss_dict
+            else:
+                return out_dict
+
         # -----------------------------------------------
         # get rot and trans from pnp_net
         # NOTE: use softmax for bins (the last dim is bg)
@@ -224,13 +255,6 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         # NOTE: for region, the 1st dim is bg
         region_softmax = F.softmax(region[:, 1:, :, :], dim=1)
 
-        if pnp_net_cfg.MASK_ATTENTION != "none":
-            vis_mask_atten = get_mask_prob(vis_mask, mask_loss_type=net_cfg.LOSS_CFG.MASK_LOSS_TYPE)
-            full_mask_atten = get_mask_prob(full_mask, mask_loss_type=net_cfg.LOSS_CFG.MASK_LOSS_TYPE)
-        else:
-            vis_mask_atten = vis_mask
-            full_mask_atten = full_mask
-
         region_atten = None
         if pnp_net_cfg.REGION_ATTENTION:
             region_atten = region_softmax
@@ -238,7 +262,7 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         pred_rot_, pred_t_ = self.pnp_net(
             coor_feat=coor_feat,
             region=region_atten,
-            mask=torch.cat((full_mask_atten, vis_mask_atten), dim=1),
+            mask=torch.cat((full_mask, vis_mask), dim=1),
             vf=torch.cat((full_vf, vis_vf), dim=1),
             extents=roi_extents,
         )
@@ -286,21 +310,18 @@ class GDRN_DoubleMask_DoubleVF(nn.Module):
         else:
             raise ValueError(f"Unknown trans type: {pnp_net_cfg.TRANS_TYPE}")
         # endregion
+        out_dict.update(
+            {
+                "rot": pred_ego_rot,
+                "trans": pred_trans
+            }
+        )
+
+        if do_self:
+            return out_dict
 
         if not do_loss:  # test
-            out_dict = {"rot": pred_ego_rot, "trans": pred_trans}
-            if cfg.TEST.USE_PNP or cfg.TEST.SAVE_RESULTS_ONLY:
-                # TODO: move the pnp/ransac inside forward
-                out_dict.update(
-                    {
-                        "mask": vis_mask,
-                        "full_mask": full_mask,
-                        "coor_x": coor_x,
-                        "coor_y": coor_y,
-                        "coor_z": coor_z,
-                        "region": region,
-                    }
-                )
+            pass
         else:
             out_dict = {}
             assert (

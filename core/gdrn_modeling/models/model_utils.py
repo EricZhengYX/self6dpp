@@ -1,12 +1,14 @@
+import logging
 import copy
 import torch
-import torch.nn as nn
 import numpy as np
 from lib.pysixd.pose_error import re, te
 from core.utils.pose_utils import quat2mat_torch
 from core.utils.rot_reps import rot6d_to_mat_batch
 from core.utils import lie_algebra, quaternion_lf
 from .net_factory import NECKS, HEADS
+
+logger = logging.getLogger(__name__)
 
 
 def get_xyz_doublemask_doublevf_region_out_dim(cfg):

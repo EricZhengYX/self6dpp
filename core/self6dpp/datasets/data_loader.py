@@ -45,7 +45,9 @@ from .data_loader_online import GDRN_Online_DatasetFromList
 logger = logging.getLogger(__name__)
 
 
-def transform_instance_annotations(annotation, transforms, image_size, *, keypoint_hflip_indices=None):
+def transform_instance_annotations(
+    annotation, transforms, image_size, *, keypoint_hflip_indices=None
+):
     """
     NOTE: Adapted from detection_utils.
     Apply transforms to box, segmentation, keypoints, etc. of annotations of a single instance.
@@ -68,19 +70,25 @@ def transform_instance_annotations(annotation, transforms, image_size, *, keypoi
             The "bbox_mode" field will be set to XYXY_ABS.
     """
     im_H, im_W = image_size
-    bbox = BoxMode.convert(annotation["bbox"], annotation["bbox_mode"], BoxMode.XYXY_ABS)
+    bbox = BoxMode.convert(
+        annotation["bbox"], annotation["bbox_mode"], BoxMode.XYXY_ABS
+    )
     # Note that bbox is 1d (per-instance bounding box)
     annotation["bbox"] = np.array(transforms.apply_box([bbox])[0])
     annotation["bbox_mode"] = BoxMode.XYXY_ABS
 
     if "segmentation" in annotation:
         # NOTE: here we transform segms to binary masks (interp is nearest by default)
-        mask = transforms.apply_segmentation(cocosegm2mask(annotation["segmentation"], h=im_H, w=im_W))
+        mask = transforms.apply_segmentation(
+            cocosegm2mask(annotation["segmentation"], h=im_H, w=im_W)
+        )
         annotation["segmentation"] = mask
 
     if "mask_full" in annotation:
         # NOTE: here we transform segms to binary masks (interp is nearest by default)
-        mask_full = transforms.apply_segmentation(cocosegm2mask(annotation["mask_full"], h=im_H, w=im_W))
+        mask_full = transforms.apply_segmentation(
+            cocosegm2mask(annotation["mask_full"], h=im_H, w=im_W)
+        )
         annotation["mask_full"] = mask_full
 
     if "keypoints" in annotation:
@@ -93,7 +101,9 @@ def transform_instance_annotations(annotation, transforms, image_size, *, keypoi
         annotation["keypoints"] = keypoints
 
     if "centroid_2d" in annotation:
-        annotation["centroid_2d"] = transforms.apply_coords(np.array(annotation["centroid_2d"]).reshape(1, 2)).flatten()
+        annotation["centroid_2d"] = transforms.apply_coords(
+            np.array(annotation["centroid_2d"]).reshape(1, 2)
+        ).flatten()
 
     return annotation
 
@@ -114,7 +124,9 @@ def build_gdrn_augmentation(cfg, is_train):
         max_size = cfg.INPUT.MAX_SIZE_TEST
         sample_style = "choice"
     if sample_style == "range":
-        assert len(min_size) == 2, "more than 2 ({}) min_size(s) are provided for ranges".format(len(min_size))
+        assert (
+            len(min_size) == 2
+        ), "more than 2 ({}) min_size(s) are provided for ranges".format(len(min_size))
 
     augmentation = []
     augmentation.append(T.ResizeShortestEdge(min_size, max_size, sample_style))
@@ -154,7 +166,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         self.augmentation = build_gdrn_augmentation(cfg, is_train=(split == "train"))
         if cfg.INPUT.COLOR_AUG_PROB > 0 and cfg.INPUT.COLOR_AUG_TYPE.lower() == "ssd":
             self.augmentation.append(ColorAugSSDTransform(img_format=cfg.INPUT.FORMAT))
-            logging.getLogger(__name__).info("Color augmentation used in training: " + str(self.augmentation[-1]))
+            logging.getLogger(__name__).info(
+                "Color augmentation used in training: " + str(self.augmentation[-1])
+            )
         # fmt: off
         self.img_format = cfg.INPUT.FORMAT  # default BGR
         self.with_depth = cfg.INPUT.WITH_DEPTH
@@ -167,7 +181,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         self.cfg = cfg
         self.split = split  # train | val | test
         if split == "train" and self.color_aug_prob > 0:
-            self.color_augmentor = self._get_color_augmentor(aug_type=self.color_aug_type, aug_code=self.color_aug_code)
+            self.color_augmentor = self._get_color_augmentor(
+                aug_type=self.color_aug_type, aug_code=self.color_aug_code
+            )
         else:
             self.color_augmentor = None
         # ------------------------
@@ -188,12 +204,18 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             return np.frombuffer(buffer, dtype=np.uint8)
 
         if self._serialize:
-            logger.info("Serializing {} elements to byte tensors and concatenating them all ...".format(len(self._lst)))
+            logger.info(
+                "Serializing {} elements to byte tensors and concatenating them all ...".format(
+                    len(self._lst)
+                )
+            )
             self._lst = [_serialize(x) for x in self._lst]
             self._addr = np.asarray([len(x) for x in self._lst], dtype=np.int64)
             self._addr = np.cumsum(self._addr)
             self._lst = np.concatenate(self._lst)
-            logger.info("Serialized dataset takes {:.2f} MiB".format(len(self._lst) / 1024 ** 2))
+            logger.info(
+                "Serialized dataset takes {:.2f} MiB".format(len(self._lst) / 1024 ** 2)
+            )
 
     def __len__(self):
         if self._serialize:
@@ -220,9 +242,13 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         for i, obj_name in enumerate(objs):
             obj_id = data_ref.obj2id[obj_name]
             if with_center:
-                cur_fps_points[i] = loaded_fps_points[str(obj_id)][f"fps{num_fps_points}_and_center"]
+                cur_fps_points[i] = loaded_fps_points[str(obj_id)][
+                    f"fps{num_fps_points}_and_center"
+                ]
             else:
-                cur_fps_points[i] = loaded_fps_points[str(obj_id)][f"fps{num_fps_points}_and_center"][:-1]
+                cur_fps_points[i] = loaded_fps_points[str(obj_id)][
+                    f"fps{num_fps_points}_and_center"
+                ][:-1]
         self.fps_points[dataset_name] = cur_fps_points
         return self.fps_points[dataset_name]
 
@@ -307,9 +333,16 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         for i, obj_name in enumerate(objs):
             obj_id = data_ref.obj2id[obj_name]
             model_info = loaded_models_info[str(obj_id)]
-            if "symmetries_discrete" in model_info or "symmetries_continuous" in model_info:
-                sym_transforms = misc.get_symmetry_transformations(model_info, max_sym_disc_step=0.01)
-                sym_info = np.array([sym["R"] for sym in sym_transforms], dtype=np.float32)
+            if (
+                "symmetries_discrete" in model_info
+                or "symmetries_continuous" in model_info
+            ):
+                sym_transforms = misc.get_symmetry_transformations(
+                    model_info, max_sym_disc_step=0.01
+                )
+                sym_info = np.array(
+                    [sym["R"] for sym in sym_transforms], dtype=np.float32
+                )
             else:
                 sym_info = None
             cur_sym_infos[i] = sym_info
@@ -371,7 +404,11 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                     mask_trunc = None
 
         # NOTE: maybe add or change color augment here ===================================
-        if self.split == "train" and self.color_aug_prob > 0 and self.color_augmentor is not None:
+        if (
+            self.split == "train"
+            and self.color_aug_prob > 0
+            and self.color_augmentor is not None
+        ):
             if np.random.rand() < self.color_aug_prob:
                 if cfg.INPUT.COLOR_AUG_SYN_ONLY and img_type not in ["real"]:
                     image = self._color_aug(image, self.color_aug_type)
@@ -493,7 +530,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
                 # roi_coord_2d_rel
                 roi_coord_2d_rel = (
-                    bbox_center.reshape(2, 1, 1) - roi_coord_2d * np.array([im_W, im_H]).reshape(2, 1, 1)
+                    bbox_center.reshape(2, 1, 1)
+                    - roi_coord_2d * np.array([im_W, im_H]).reshape(2, 1, 1)
                 ) / scale
                 roi_infos["roi_coord_2d_rel"].append(roi_coord_2d_rel.astype("float32"))
 
@@ -525,7 +563,11 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         xyz = np.zeros((im_H, im_W, 3), dtype=np.float32)
         xyz[y1 : y2 + 1, x1 : x2 + 1, :] = xyz_crop
         # NOTE: full mask
-        mask_obj = ((xyz[:, :, 0] != 0) | (xyz[:, :, 1] != 0) | (xyz[:, :, 2] != 0)).astype(np.bool).astype(np.float32)
+        mask_obj = (
+            ((xyz[:, :, 0] != 0) | (xyz[:, :, 1] != 0) | (xyz[:, :, 2] != 0))
+            .astype(np.bool)
+            .astype(np.float32)
+        )
         if cfg.INPUT.SMOOTH_XYZ:
             xyz = self.smooth_xyz(xyz)
 
@@ -543,7 +585,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
         # USER: Implement additional transformations if you have other types of data
         # inst_infos.pop("segmentation")  # NOTE: use mask from xyz
-        anno = transform_instance_annotations(inst_infos, transforms, image_shape, keypoint_hflip_indices=None)
+        anno = transform_instance_annotations(
+            inst_infos, transforms, image_shape, keypoint_hflip_indices=None
+        )
 
         # augment bbox ===================================================
         bbox_xyxy = anno["bbox"]
@@ -574,7 +618,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
         # roi_coord_2d_rel
         roi_coord_2d_rel = (
-            bbox_center.reshape(2, 1, 1) - roi_coord_2d * np.array([im_W, im_H]).reshape(2, 1, 1)
+            bbox_center.reshape(2, 1, 1)
+            - roi_coord_2d * np.array([im_W, im_H]).reshape(2, 1, 1)
         ) / scale
 
         ## roi_mask ---------------------------------------
@@ -629,13 +674,17 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             )
 
         ## roi_xyz ----------------------------------------------------
-        roi_xyz = crop_resize_by_warp_affine(xyz, bbox_center, scale, out_res, interpolation=mask_xyz_interp)
+        roi_xyz = crop_resize_by_warp_affine(
+            xyz, bbox_center, scale, out_res, interpolation=mask_xyz_interp
+        )
 
         # region label
         if g_head_cfg.NUM_REGIONS > 1:
             fps_points = self._get_fps_points(dataset_name)[roi_cls]
             roi_region = xyz_to_region(roi_xyz, fps_points)  # HW
-            dataset_dict["roi_region"] = torch.as_tensor(roi_region.astype(np.int32)).contiguous()
+            dataset_dict["roi_region"] = torch.as_tensor(
+                roi_region.astype(np.int32)
+            ).contiguous()
 
         roi_xyz = roi_xyz.transpose(2, 0, 1)  # HWC-->CHW
         # normalize xyz to [0, 1] using extent
@@ -644,7 +693,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         roi_xyz[2] = roi_xyz[2] / roi_extent[2] + 0.5
 
         xyz_loss_type = loss_cfg.XYZ_LOSS_TYPE
-        if ("CE" in xyz_loss_type) or ("cls" in cfg.MODEL.POSE_NET.NAME):  # convert target to int for cls
+        if ("CE" in xyz_loss_type) or (
+            "cls" in cfg.MODEL.POSE_NET.NAME
+        ):  # convert target to int for cls
             n_xyz_bin = g_head_cfg.XYZ_BIN
             # assume roi_xyz has been normalized in [0, 1]
             roi_xyz_bin = np.zeros_like(roi_xyz)
@@ -677,29 +728,51 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             roi_xyz_bin[2][roi_mask_xyz == 0] = n_xyz_bin
 
             if "CE" in xyz_loss_type:
-                dataset_dict["roi_xyz_bin"] = torch.as_tensor(roi_xyz_bin.astype("uint8")).contiguous()
+                dataset_dict["roi_xyz_bin"] = torch.as_tensor(
+                    roi_xyz_bin.astype("uint8")
+                ).contiguous()
             if "/" in xyz_loss_type and len(xyz_loss_type.split("/")[1]) > 0:
-                dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
+                dataset_dict["roi_xyz"] = torch.as_tensor(
+                    roi_xyz.astype("float32")
+                ).contiguous()
         else:
-            dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
+            dataset_dict["roi_xyz"] = torch.as_tensor(
+                roi_xyz.astype("float32")
+            ).contiguous()
 
         # pose targets ----------------------------------------------------------------------
         pose = inst_infos["pose"]
         dataset_dict["ego_rot"] = torch.as_tensor(pose[:3, :3].astype("float32"))
         dataset_dict["trans"] = torch.as_tensor(inst_infos["trans"].astype("float32"))
 
-        dataset_dict["roi_points"] = torch.as_tensor(self._get_model_points(dataset_name)[roi_cls].astype("float32"))
+        dataset_dict["roi_points"] = torch.as_tensor(
+            self._get_model_points(dataset_name)[roi_cls].astype("float32")
+        )
         dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
 
-        dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()
-        dataset_dict["roi_coord_2d"] = torch.as_tensor(roi_coord_2d.astype("float32")).contiguous()
-        dataset_dict["roi_coord_2d_rel"] = torch.as_tensor(roi_coord_2d_rel.astype("float32")).contiguous()
+        dataset_dict["roi_img"] = torch.as_tensor(
+            roi_img.astype("float32")
+        ).contiguous()
+        dataset_dict["roi_coord_2d"] = torch.as_tensor(
+            roi_coord_2d.astype("float32")
+        ).contiguous()
+        dataset_dict["roi_coord_2d_rel"] = torch.as_tensor(
+            roi_coord_2d_rel.astype("float32")
+        ).contiguous()
 
-        dataset_dict["roi_mask_trunc"] = torch.as_tensor(roi_mask_trunc.astype("float32")).contiguous()
-        dataset_dict["roi_mask_visib"] = torch.as_tensor(roi_mask_visib.astype("float32")).contiguous()
-        dataset_dict["roi_mask_obj"] = torch.as_tensor(roi_mask_obj.astype("float32")).contiguous()
+        dataset_dict["roi_mask_trunc"] = torch.as_tensor(
+            roi_mask_trunc.astype("float32")
+        ).contiguous()
+        dataset_dict["roi_mask_visib"] = torch.as_tensor(
+            roi_mask_visib.astype("float32")
+        ).contiguous()
+        dataset_dict["roi_mask_obj"] = torch.as_tensor(
+            roi_mask_obj.astype("float32")
+        ).contiguous()
         if "mask_full" in anno.keys():
-            dataset_dict["roi_mask_full"] = torch.as_tensor(roi_mask_full.astype("float32")).contiguous()
+            dataset_dict["roi_mask_full"] = torch.as_tensor(
+                roi_mask_full.astype("float32")
+            ).contiguous()
 
         dataset_dict["bbox_center"] = torch.as_tensor(bbox_center, dtype=torch.float32)
         dataset_dict["scale"] = scale
@@ -709,7 +782,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         z_ratio = inst_infos["trans"][2] / resize_ratio
         obj_center = anno["centroid_2d"]
         delta_c = obj_center - bbox_center
-        dataset_dict["trans_ratio"] = torch.as_tensor([delta_c[0] / bw, delta_c[1] / bh, z_ratio]).to(torch.float32)
+        dataset_dict["trans_ratio"] = torch.as_tensor(
+            [delta_c[0] / bw, delta_c[1] / bh, z_ratio]
+        ).to(torch.float32)
         return dataset_dict
 
     def smooth_xyz(self, xyz):
@@ -754,16 +829,26 @@ def build_gdrn_train_loader(cfg, dataset_names):
     dataset_dicts = get_detection_dataset_dicts(
         dataset_names,
         filter_empty=cfg.DATALOADER.FILTER_EMPTY_ANNOTATIONS,
-        min_keypoints=cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE if cfg.MODEL.KEYPOINT_ON else 0,
-        proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None,
+        min_keypoints=cfg.MODEL.ROI_KEYPOINT_HEAD.MIN_KEYPOINTS_PER_IMAGE
+        if cfg.MODEL.KEYPOINT_ON
+        else 0,
+        proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN
+        if cfg.MODEL.LOAD_PROPOSALS
+        else None,
     )
 
-    dataset_dicts = filter_invalid_in_dataset_dicts(dataset_dicts, visib_thr=cfg.DATALOADER.FILTER_VISIB_THR)
+    dataset_dicts = filter_invalid_in_dataset_dicts(
+        dataset_dicts, visib_thr=cfg.DATALOADER.FILTER_VISIB_THR
+    )
 
     if cfg.MODEL.POSE_NET.XYZ_ONLINE:
-        dataset = GDRN_Online_DatasetFromList(cfg, split="train", lst=dataset_dicts, copy=False)
+        dataset = GDRN_Online_DatasetFromList(
+            cfg, split="train", lst=dataset_dicts, copy=False
+        )
     else:
-        dataset = GDRN_DatasetFromList(cfg, split="train", lst=dataset_dicts, copy=False)
+        dataset = GDRN_DatasetFromList(
+            cfg, split="train", lst=dataset_dicts, copy=False
+        )
 
     sampler_name = cfg.DATALOADER.SAMPLER_TRAIN
     logger = logging.getLogger(__name__)
@@ -772,8 +857,10 @@ def build_gdrn_train_loader(cfg, dataset_names):
     if sampler_name == "TrainingSampler":
         sampler = TrainingSampler(len(dataset))
     elif sampler_name == "RepeatFactorTrainingSampler":
-        repeat_factors = RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
-            dataset_dicts, cfg.DATALOADER.REPEAT_THRESHOLD
+        repeat_factors = (
+            RepeatFactorTrainingSampler.repeat_factors_from_category_frequency(
+                dataset_dicts, cfg.DATALOADER.REPEAT_THRESHOLD
+            )
         )
         sampler = RepeatFactorTrainingSampler(repeat_factors)
     else:
@@ -803,7 +890,11 @@ def build_gdrn_test_loader(cfg, dataset_name, train_objs=None):
     dataset_dicts = get_detection_dataset_dicts(
         [dataset_name],
         filter_empty=False,
-        proposal_files=[cfg.DATASETS.PROPOSAL_FILES_TEST[list(cfg.DATASETS.TEST).index(dataset_name)]]
+        proposal_files=[
+            cfg.DATASETS.PROPOSAL_FILES_TEST[
+                list(cfg.DATASETS.TEST).index(dataset_name)
+            ]
+        ]
         if cfg.MODEL.LOAD_PROPOSALS
         else None,
     )

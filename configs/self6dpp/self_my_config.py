@@ -84,7 +84,7 @@ RENDERER = dict(
 
 MODEL = dict(
     # synthetically trained model
-    WEIGHTS="output/model_final_wo_optim-e88786e4.pth",
+    WEIGHTS="/home/eric/tb_remote/sd_model_0086949.pth",
     # init
     # ad10    rete5    te2
     # 50.86   98.57    91.81
@@ -95,13 +95,14 @@ MODEL = dict(
     LOAD_DETS_TRAIN=True,  # NOTE: load detections for self-train
     LOAD_DETS_TRAIN_WITH_POSE=True,  # NOTE: load pose_refine
     LOAD_DETS_TEST=True,
+    PSEUDO_POSE_TYPE="pose_init",  # pose_est | pose_refine | pose_init (online inferred by teacher)
     EMA=dict(
         ENABLED=True,
         INIT_CFG=dict(decay=0.999, updates=0),  # epoch-based
         UPDATE_FREQ=10,  # update the mean teacher every n epochs
     ),
     POSE_NET=dict(
-        NAME="GDRN_double_mask",  # used module file name  GDRN_double_mask_double_vf
+        NAME="GDRN_double_mask_double_vf",  # used module file name  GDRN_double_mask_double_vf
         # NOTE: for self-supervised training phase, use offline labels should be more accurate
         XYZ_ONLINE=False,  # rendering xyz online
         XYZ_BP=True,  # calculate xyz from depth by backprojection
@@ -125,7 +126,7 @@ MODEL = dict(
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(
-                type="TopDownDoubleMaskXyzRegionHead",  # TopDownDoubleMaskDoubleVFXyzRegionHead TopDownDoubleMaskXyzRegionHead
+                type="TopDownDoubleMaskDoubleVFXyzRegionHead",  # TopDownDoubleMaskDoubleVFXyzRegionHead TopDownDoubleMaskXyzRegionHead
                 in_dim=2048,  # this is num out channels of backbone conv feature
             ),
             NUM_REGIONS=64,
@@ -136,11 +137,11 @@ MODEL = dict(
             INIT_CFG=dict(
                 norm="GN",
                 act="gelu",
-                type="ConvPnPNet",  # ConvPnPNet ConvPnPNetAll
+                type="ConvPnPNetAll",  # ConvPnPNet ConvPnPNetAll
             ),
             REGION_ATTENTION=True,
             WITH_2D_COORD=True,
-            MASK_ATTENTION="none",  # concat none
+            MASK_ATTENTION="concat",  # concat none
             WITH_VF="both",
             ROT_TYPE="allo_rot6d",
             TRANS_TYPE="centroid_z",
@@ -177,6 +178,9 @@ MODEL = dict(
             Z_LW=1.0,
         ),
         SELF_LOSS_CFG=dict(
+            # vf loss -------------------------
+            VIS_VF_LW=1.0,
+            FULL_VF_LW=1.0,
             # LAB space loss ------------------
             LAB_NO_L=True,
             LAB_LW=0.2,
@@ -189,8 +193,8 @@ MODEL = dict(
             # MASK_INIT_REN_LOSS_TYPE="dice",
             MASK_INIT_REN_LW=1.0,
             # depth-based geometric loss ------
-            GEOM_LOSS_TYPE="chamfer",  # L1, chamfer
-            GEOM_LW=0.0,  #  NOTE
+            GEOM_LOSS_TYPE="chamfer",  # chamfer
+            GEOM_LW=0.0,
             CHAMFER_CENTER_LW=0.0,
             CHAMFER_DIST_THR=0.5,
             # refiner-based loss --------------
@@ -204,6 +208,10 @@ MODEL = dict(
             ),
         ),
     ),
+)
+
+TRAIN = dict(
+    DEBUG_SINGLE_IM=False,
 )
 
 TEST = dict(

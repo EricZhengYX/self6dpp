@@ -8,6 +8,9 @@ matplotlib.use("Agg")
 import os.path as osp
 import sys
 from setproctitle import setproctitle
+import numpy as np
+np.set_string_function(lambda x: "{s} @ {dt}".format(s=x.shape, dt=x.dtype))
+
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
@@ -37,7 +40,7 @@ from core.self6dpp.datasets.dataset_factory import register_datasets_in_cfg
 from core.self6dpp.engine.self_engine_utils import get_DIBR_models_renderer, get_dibr_models_renderer, my_get_DIBR_models_renderer
 from core.self6dpp.engine.self_engine import do_test, do_train, do_save_results
 
-from core.self6dpp.models import GDRN, GDRN_double_mask  # noqa
+from core.self6dpp.models import GDRN, GDRN_double_mask, GDRN_double_mask_double_vf
 from core.self6dpp.models import DeepIM_FlowNet  # noqa
 
 

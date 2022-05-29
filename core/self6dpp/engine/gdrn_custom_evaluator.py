@@ -809,7 +809,7 @@ class GDRN_EvaluatorCustom(DatasetEvaluator):
         if self._distributed:
             self._logger.warning("\n The current evaluation on multi-gpu is not correct, run with single-gpu instead.")
 
-        return {}
+        return big_tab, res_log_tab_str
 
     def _eval_predictions_precision(self):
         """NOTE: eval precision instead of recall

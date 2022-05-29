@@ -9,7 +9,6 @@ import mmcv
 import numpy as np
 import ref
 import torch
-from imgaug import seed as iaseed
 from detectron2.data import MetadataCatalog
 from detectron2.data import detection_utils as utils
 from detectron2.data import transforms as T
@@ -39,7 +38,6 @@ from core.utils.my_distributed_sampler import (
 
 from lib.pysixd import inout, misc
 from lib.utils.mask_utils import cocosegm2mask, get_edge
-from lib.utils.aug_utils import build_gdrn_augmentation, build_gdrn_augmentation_pose_variated
 
 from .dataset_factory import register_datasets
 
@@ -104,6 +102,34 @@ def transform_instance_annotations(
     return annotation
 
 
+def build_gdrn_augmentation(cfg, is_train):
+    """Create a list of :class:`Augmentation` from config. when training 6d
+    pose, cannot flip.
+
+    Returns:
+        list[Augmentation]
+    """
+    if is_train:
+        min_size = cfg.INPUT.MIN_SIZE_TRAIN
+        max_size = cfg.INPUT.MAX_SIZE_TRAIN
+        sample_style = cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
+    else:
+        min_size = cfg.INPUT.MIN_SIZE_TEST
+        max_size = cfg.INPUT.MAX_SIZE_TEST
+        sample_style = "choice"
+    if sample_style == "range":
+        assert (
+            len(min_size) == 2
+        ), "more than 2 ({}) min_size(s) are provided for ranges".format(len(min_size))
+
+    augmentation = []
+    augmentation.append(T.ResizeShortestEdge(min_size, max_size, sample_style))
+    if is_train:
+        # augmentation.append(T.RandomFlip())
+        logger.info("Augmentations used in training: " + str(augmentation))
+    return augmentation
+
+
 class GDRN_Self_DatasetFromList(Base_DatasetFromList):
     """NOTE: we can also use the default DatasetFromList and implement a similar custom DataMapper,
     but it is harder to implement some features relying on other dataset dicts.
@@ -131,8 +157,6 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
                 process instead of making a copy.
         """
         self.augmentation = build_gdrn_augmentation(cfg, is_train=(split == "train"))
-        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg)
-
         # fmt: off
         self.img_format = cfg.INPUT.FORMAT  # default BGR
         self.with_depth = cfg.INPUT.WITH_DEPTH
@@ -163,10 +187,6 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         self._copy = copy
         self._serialize = serialize
 
-        # output mode: pose | geo
-        self.__geo_mode_prob = cfg.INPUT.POSE_VARIATED_AUG.get("OVERALL_PROB", 0)
-        self.__output_mode = "pose"
-
         def _serialize(data):
             buffer = pickle.dumps(data, protocol=-1)
             return np.frombuffer(buffer, dtype=np.uint8)
@@ -191,21 +211,20 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         else:
             return len(self._lst)
 
-    def _get_fps_points(self, dataset_name, num_fps_points, with_center=False):
+    def _get_fps_points(self, dataset_name, with_center=False):
         """convert to label based keys.
 
         # TODO: get models info similarly
         """
-        key_name = "{dsn}::{nfps}".format(dsn=dataset_name, nfps=num_fps_points)
-        if key_name in self.fps_points:
-            return self.fps_points[key_name]
+        if dataset_name in self.fps_points:
+            return self.fps_points[dataset_name]
 
         dset_meta = MetadataCatalog.get(dataset_name)
         ref_key = dset_meta.ref_key
         data_ref = ref.__dict__[ref_key]
         objs = dset_meta.objs
-
-        # num_fps_points = cfg.MODEL.POSE_NET.GEO_HEAD.NUM_REGIONS
+        cfg = self.cfg
+        num_fps_points = cfg.MODEL.POSE_NET.GEO_HEAD.NUM_REGIONS
         cur_fps_points = {}
         loaded_fps_points = data_ref.get_fps_points()
         for i, obj_name in enumerate(objs):
@@ -218,8 +237,8 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
                 cur_fps_points[i] = loaded_fps_points[str(obj_id)][
                     f"fps{num_fps_points}_and_center"
                 ][:-1]
-        self.fps_points[key_name] = cur_fps_points
-        return self.fps_points[key_name]
+        self.fps_points[dataset_name] = cur_fps_points
+        return self.fps_points[dataset_name]
 
     def _get_model_points(self, dataset_name):
         """convert to label based keys."""
@@ -317,59 +336,156 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         self.sym_infos[dataset_name] = cur_sym_infos
         return self.sym_infos[dataset_name]
 
-    def read_data_train(self, dataset_dict):
-        """load image and annos random shift & scale bbox; crop, rescale."""
-        assert self.split == "train", self.split
+    def read_data(self, dataset_dict):
+        """load image and annos; random shift & scale bbox; crop, rescale."""
         cfg = self.cfg
         net_cfg = cfg.MODEL.POSE_NET
         g_head_cfg = net_cfg.GEO_HEAD
-        pnp_net_cfg = net_cfg.PNP_NET
-        loss_cfg = net_cfg.LOSS_CFG
 
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
 
         dataset_name = dataset_dict["dataset_name"]
 
         image = read_image_mmcv(dataset_dict["file_name"], format=self.img_format)
+
         # should be consistent with the size in dataset_dict
         utils.check_image_size(dataset_dict, image)
         im_H_ori, im_W_ori = image.shape[:2]
-
-        if "cam" in dataset_dict:
-            K = dataset_dict["cam"].astype("float32")
-            dataset_dict["cam"] = torch.as_tensor(K)
-        else:
-            raise RuntimeError("cam intrinsic is missing")
 
         # NOTE: assume loading real images with detections, so no replacing bg ###############################
 
         gt_img = image.copy()  # original image, no color aug
 
         # NOTE: maybe add or change color augment here ===================================
-        if self.color_aug_prob > 0 and self.color_augmentor is not None:
+        if (
+            self.split == "train"
+            and self.color_aug_prob > 0
+            and self.color_augmentor is not None
+        ):
             if np.random.rand() < self.color_aug_prob:
                 image = self._color_aug(image, self.color_aug_type)
 
         # other transforms (mainly geometric ones);
         # for 6d pose task, flip is not allowed in general except for some 2d keypoints methods
         image, transforms = T.apply_augmentations(self.augmentation, image)
-        im_H, im_W = image_shape = image.shape[:2]  # h, w
         # gt_img after geometric aug (maybe no geo aug)
         gt_img, _ = T.apply_augmentations(self.augmentation, gt_img)
+        im_H, im_W = image_shape = image.shape[:2]  # h, w
 
         # NOTE: scale camera intrinsic if necessary ================================
         scale_x = im_W / im_W_ori
         scale_y = im_H / im_H_ori  # NOTE: generally scale_x should be equal to scale_y
-        if im_W != im_W_ori or im_H != im_H_ori:
-            dataset_dict["cam"][0] *= scale_x
-            dataset_dict["cam"][1] *= scale_y
-            K = dataset_dict["cam"].numpy()
+        if "cam" in dataset_dict:
+            if im_W != im_W_ori or im_H != im_H_ori:
+                dataset_dict["cam"][0] *= scale_x
+                dataset_dict["cam"][1] *= scale_y
+            K = dataset_dict["cam"].astype("float32")
+            dataset_dict["cam"] = torch.as_tensor(K)
 
         input_res = net_cfg.INPUT_RES
         out_res = net_cfg.OUTPUT_RES
 
         # CHW -> HWC
         coord_2d = get_2d_coord_np(im_W, im_H, low=0, high=1).transpose(1, 2, 0)
+
+        #################################################################################
+        if self.split != "train":
+            # don't load annotations at test time
+            test_bbox_type = cfg.TEST.TEST_BBOX_TYPE
+            if test_bbox_type == "gt":
+                bbox_key = "bbox"
+            else:
+                bbox_key = f"bbox_{test_bbox_type}"
+            assert not self.flatten, "Do not use flattened dicts for test!"
+            # here get batched rois
+            roi_infos = {}
+            # yapf: disable
+            roi_keys = ["scene_im_id", "file_name", "cam", "im_H", "im_W",
+                        "roi_img", "inst_id", "roi_coord_2d", "roi_cls", "score", "roi_extent",
+                         bbox_key, "bbox_mode", "bbox_center", "roi_wh",
+                         "scale", "resize_ratio", "model_info",
+                        ]
+            for _key in roi_keys:
+                roi_infos[_key] = []
+            # yapf: enable
+            # TODO: how to handle image without detections
+            #   filter those when load annotations or detections, implement a function for this
+            # "annotations" means detections
+            for inst_i, inst_infos in enumerate(dataset_dict["annotations"]):
+                # inherent image-level infos
+                roi_infos["scene_im_id"].append(dataset_dict["scene_im_id"])
+                roi_infos["file_name"].append(dataset_dict["file_name"])
+                roi_infos["im_H"].append(im_H)
+                roi_infos["im_W"].append(im_W)
+                roi_infos["cam"].append(dataset_dict["cam"].cpu().numpy())
+
+                # roi-level infos
+                roi_infos["inst_id"].append(inst_i)
+                roi_infos["model_info"].append(inst_infos["model_info"])
+
+                roi_cls = inst_infos["category_id"]
+                roi_infos["roi_cls"].append(roi_cls)
+                roi_infos["score"].append(inst_infos.get("score", 1.0))
+
+                # extent
+                roi_extent = self._get_extents(dataset_name)[roi_cls]
+                roi_infos["roi_extent"].append(roi_extent)
+
+                bbox = BoxMode.convert(
+                    inst_infos[bbox_key],
+                    inst_infos["bbox_mode"],
+                    BoxMode.XYXY_ABS,
+                )
+                bbox = np.array(transforms.apply_box([bbox])[0])
+                roi_infos[bbox_key].append(bbox)
+                roi_infos["bbox_mode"].append(BoxMode.XYXY_ABS)
+                x1, y1, x2, y2 = bbox
+                bbox_center = np.array([0.5 * (x1 + x2), 0.5 * (y1 + y2)])
+                bw = max(x2 - x1, 1)
+                bh = max(y2 - y1, 1)
+                scale = max(bh, bw) * cfg.INPUT.DZI_PAD_SCALE
+                scale = min(scale, max(im_H, im_W)) * 1.0
+
+                roi_infos["bbox_center"].append(bbox_center.astype("float32"))
+                roi_infos["scale"].append(scale)
+                roi_infos["roi_wh"].append(np.array([bw, bh], dtype=np.float32))
+                roi_infos["resize_ratio"].append(out_res / scale)
+
+                # CHW, float32 tensor
+                # roi_image
+                roi_img = crop_resize_by_warp_affine(
+                    image,
+                    bbox_center,
+                    scale,
+                    input_res,
+                    interpolation=cv2.INTER_LINEAR,
+                ).transpose(2, 0, 1)
+
+                roi_img = self.normalize_image(cfg, roi_img)
+                roi_infos["roi_img"].append(roi_img.astype("float32"))
+
+                # roi_coord_2d
+                roi_coord_2d = crop_resize_by_warp_affine(
+                    coord_2d,
+                    bbox_center,
+                    scale,
+                    out_res,
+                    interpolation=cv2.INTER_LINEAR,
+                ).transpose(
+                    2, 0, 1
+                )  # HWC -> CHW
+                roi_infos["roi_coord_2d"].append(roi_coord_2d.astype("float32"))
+
+            for _key in roi_keys:
+                if _key in ["roi_img", "roi_coord_2d"]:
+                    dataset_dict[_key] = torch.as_tensor(roi_infos[_key]).contiguous()
+                elif _key in ["model_info", "scene_im_id", "file_name"]:
+                    # can not convert to tensor
+                    dataset_dict[_key] = roi_infos[_key]
+                else:
+                    dataset_dict[_key] = torch.tensor(roi_infos[_key])
+
+            return dataset_dict
         #######################################################################################
         # NOTE: currently assume flattened dicts for train
         assert self.flatten, "Only support flattened dicts for train now"
@@ -455,272 +571,37 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
 
         # fps points: for region label
         if g_head_cfg.NUM_REGIONS > 1:
-            fps_points = self._get_fps_points(dataset_name, g_head_cfg.NUM_REGIONS)[roi_cls]
+            fps_points = self._get_fps_points(dataset_name)[roi_cls]
             dataset_dict["roi_fps_points"] = torch.as_tensor(
                 fps_points.astype(np.float32)
             ).contiguous()
 
-        if self.__output_mode == "geo":
-            """
-            making 'pose-variated data augmentations', for following nparrays:
-            'roi_img'
-            'roi_gt_img'
-            """
-            dataset_dict["mode"] = "geo"
-            fix_seed = np.random.randint(0, 2022)
+        dataset_dict["roi_img"] = torch.as_tensor(
+            roi_img.astype("float32")
+        ).contiguous()
+        dataset_dict["roi_gt_img"] = torch.as_tensor(
+            roi_gt_img.astype("float32")
+        ).contiguous()
 
-            def _make_aug(m: np.ndarray, npdtype=np.float32) -> torch.Tensor:
-                iaseed(fix_seed)
-                if m.ndim == 3:
-                    m_aug = self.augmentation_pose_variated(
-                        image=m.transpose((1, 2, 0))
-                    ).astype(npdtype)
-                    return torch.as_tensor(m_aug.transpose((2, 0, 1))).contiguous()
-                elif m.ndim == 2:
-                    m_aug = self.augmentation_pose_variated(image=m[..., None]).astype(
-                        npdtype
-                    )
-                    return torch.as_tensor(m_aug[..., 0]).contiguous()
-                else:
-                    raise TypeError("Wrong shape: {}".format(m.shape))
+        gt_img = self.normalize_image(cfg, gt_img.transpose(2, 0, 1))
+        dataset_dict["gt_img"] = torch.as_tensor(gt_img.astype("float32")).contiguous()
 
-            dataset_dict["roi_img"] = _make_aug(roi_img)
-            dataset_dict["roi_gt_img"] = _make_aug(roi_gt_img)
+        dataset_dict["roi_points"] = torch.as_tensor(
+            self._get_model_points(dataset_name)[roi_cls].astype("float32")
+        )
+        dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
 
-            return dataset_dict
-        elif self.__output_mode == "pose":
-            dataset_dict["mode"] = "pose"
+        dataset_dict["roi_coord_2d"] = torch.as_tensor(
+            roi_coord_2d.astype("float32")
+        ).contiguous()
 
-            dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()
-            dataset_dict["roi_gt_img"] = torch.as_tensor(roi_gt_img.astype("float32")).contiguous()
-
-            gt_img = self.normalize_image(cfg, gt_img.transpose(2, 0, 1))
-            dataset_dict["gt_img"] = torch.as_tensor(gt_img.astype("float32")).contiguous()
-
-            dataset_dict["roi_points"] = torch.as_tensor(
-                self._get_model_points(dataset_name)[roi_cls].astype("float32")
-            )
-            dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
-
-            dataset_dict["roi_coord_2d"] = torch.as_tensor(
-                roi_coord_2d.astype("float32")
-            ).contiguous()
-
-            dataset_dict["bbox_center"] = torch.as_tensor(bbox_center, dtype=torch.float32)
-            dataset_dict["scale"] = scale
-            dataset_dict["bbox"] = anno[bbox_key]  # NOTE: original bbox
-            dataset_dict["roi_wh"] = torch.as_tensor(np.array([bw, bh], dtype=np.float32))
-            dataset_dict["resize_ratio"] = resize_ratio = out_res / scale
-
-            return dataset_dict
-        else:
-            raise ValueError("Unknown output mode: {}".format(self.__output_mode))
-
-    def read_data_test(self, dataset_dict):
-        """load image and annos random shift & scale bbox; crop, rescale."""
-        assert self.split != "train", self.split
-        cfg = self.cfg
-        net_cfg = cfg.MODEL.POSE_NET
-
-        dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
-
-        dataset_name = dataset_dict["dataset_name"]
-
-        image = read_image_mmcv(dataset_dict["file_name"], format=self.img_format)
-        # should be consistent with the size in dataset_dict
-        utils.check_image_size(dataset_dict, image)
-        im_H_ori, im_W_ori = image.shape[:2]
-
-        # NOTE: assume loading real images with detections, so no replacing bg ###############################
-
-        # other transforms (mainly geometric ones);
-        # for 6d pose task, flip is not allowed in general except for some 2d keypoints methods
-        image, transforms = T.apply_augmentations(self.augmentation, image)
-        im_H, im_W = image_shape = image.shape[:2]  # h, w
-
-        # NOTE: scale camera intrinsic if necessary ================================
-        scale_x = im_W / im_W_ori
-        scale_y = im_H / im_H_ori  # NOTE: generally scale_x should be equal to scale_y
-        if "cam" in dataset_dict:
-            if im_W != im_W_ori or im_H != im_H_ori:
-                dataset_dict["cam"][0] *= scale_x
-                dataset_dict["cam"][1] *= scale_y
-            K = dataset_dict["cam"].astype("float32")
-            dataset_dict["cam"] = torch.as_tensor(K)
-        else:
-            raise RuntimeError("cam intrinsic is missing")
-
-        ## load depth
-        if self.with_depth:
-            assert "depth_file" in dataset_dict, "depth file is not in dataset_dict"
-            depth_path = dataset_dict["depth_file"]
-            log_first_n(logging.WARN, "with depth", n=1)
-            depth = (
-                mmcv.imread(depth_path, "unchanged") / dataset_dict["depth_factor"]
-            )  # to m
-
-            depth_ch = 1
-            if self.bp_depth:
-                depth = misc.backproject(depth, K)
-                depth_ch = 3
-
-            # TODO: maybe need to resize
-            depth = depth.reshape(im_H, im_W, depth_ch).astype("float32")
-
-        input_res = net_cfg.INPUT_RES
-        out_res = net_cfg.OUTPUT_RES
-
-        # CHW -> HWC
-        coord_2d = get_2d_coord_np(im_W, im_H, low=0, high=1).transpose(1, 2, 0)
-        #################################################################################
-        # don't load annotations at test time
-        test_bbox_type = cfg.TEST.TEST_BBOX_TYPE
-        if test_bbox_type == "gt":
-            bbox_key = "bbox"
-        else:
-            bbox_key = f"bbox_{test_bbox_type}"
-        assert not self.flatten, "Do not use flattened dicts for test!"
-        # here get batched rois
-        roi_infos = {}
-        # yapf: disable
-        roi_keys = ["scene_im_id", "file_name", "cam", "im_H", "im_W",
-                    "roi_img", "inst_id", "roi_coord_2d", "roi_coord_2d_rel",
-                    "roi_cls", "score", "time", "roi_extent",
-                    bbox_key, "bbox_mode", "bbox_center", "roi_wh",
-                    "scale", "resize_ratio", "model_info",
-        ]
-        if self.with_depth:
-            roi_keys.append("roi_depth")
-        for _key in roi_keys:
-            roi_infos[_key] = []
-        # yapf: enable
-        # TODO: how to handle image without detections
-        #   filter those when load annotations or detections, implement a function for this
-        # "annotations" means detections
-        for inst_i, inst_infos in enumerate(dataset_dict["annotations"]):
-            # inherent image-level infos
-            roi_infos["scene_im_id"].append(dataset_dict["scene_im_id"])
-            roi_infos["file_name"].append(dataset_dict["file_name"])
-            roi_infos["im_H"].append(im_H)
-            roi_infos["im_W"].append(im_W)
-            roi_infos["cam"].append(dataset_dict["cam"].cpu().numpy())
-
-            # roi-level infos
-            roi_infos["inst_id"].append(inst_i)
-            roi_infos["model_info"].append(inst_infos["model_info"])
-
-            roi_cls = inst_infos["category_id"]
-            roi_infos["roi_cls"].append(roi_cls)
-            roi_infos["score"].append(inst_infos.get("score", 1.0))
-
-            roi_infos["time"].append(inst_infos.get("time", 0))
-
-            # extent
-            roi_extent = self._get_extents(dataset_name)[roi_cls]
-            roi_infos["roi_extent"].append(roi_extent)
-
-            bbox = BoxMode.convert(
-                inst_infos[bbox_key],
-                inst_infos["bbox_mode"],
-                BoxMode.XYXY_ABS,
-            )
-            bbox = np.array(transforms.apply_box([bbox])[0])
-            roi_infos[bbox_key].append(bbox)
-            roi_infos["bbox_mode"].append(BoxMode.XYXY_ABS)
-            x1, y1, x2, y2 = bbox
-            bbox_center = np.array([0.5 * (x1 + x2), 0.5 * (y1 + y2)])
-            bw = max(x2 - x1, 1)
-            bh = max(y2 - y1, 1)
-            scale = max(bh, bw) * cfg.INPUT.DZI_PAD_SCALE
-            scale = min(scale, max(im_H, im_W)) * 1.0
-
-            roi_infos["bbox_center"].append(bbox_center.astype("float32"))
-            roi_infos["scale"].append(scale)
-            roi_infos["roi_wh"].append(np.array([bw, bh], dtype=np.float32))
-            roi_infos["resize_ratio"].append(out_res / scale)
-
-            # CHW, float32 tensor
-            # roi_image
-            roi_img = crop_resize_by_warp_affine(
-                image,
-                bbox_center,
-                scale,
-                input_res,
-                interpolation=cv2.INTER_LINEAR,
-            ).transpose(2, 0, 1)
-
-            roi_img = self.normalize_image(cfg, roi_img)
-            roi_infos["roi_img"].append(roi_img.astype("float32"))
-
-            # roi_depth
-            if self.with_depth:
-                roi_depth = crop_resize_by_warp_affine(
-                    depth,
-                    bbox_center,
-                    scale,
-                    input_res,
-                    interpolation=cv2.INTER_NEAREST,
-                )
-                if depth_ch == 1:
-                    roi_depth = roi_depth.reshape(1, input_res, input_res)
-                else:
-                    roi_depth = roi_depth.transpose(2, 0, 1)
-                roi_infos["roi_depth"].append(roi_depth.astype("float32"))
-
-            # roi_coord_2d
-            roi_coord_2d = crop_resize_by_warp_affine(
-                coord_2d,
-                bbox_center,
-                scale,
-                out_res,
-                interpolation=cv2.INTER_LINEAR,
-            ).transpose(
-                2, 0, 1
-            )  # HWC -> CHW
-            roi_infos["roi_coord_2d"].append(roi_coord_2d.astype("float32"))
-
-            # roi_coord_2d_rel
-            roi_coord_2d_rel = (
-                bbox_center.reshape(2, 1, 1)
-                - roi_coord_2d * np.array([im_W, im_H]).reshape(2, 1, 1)
-            ) / scale
-            roi_infos["roi_coord_2d_rel"].append(roi_coord_2d_rel.astype("float32"))
-
-        for _key in roi_keys:
-            if _key in ["roi_img", "roi_coord_2d", "roi_coord_2d_rel", "roi_depth"]:
-                dataset_dict[_key] = torch.as_tensor(roi_infos[_key]).contiguous()
-            elif _key in ["model_info", "scene_im_id", "file_name"]:
-                # can not convert to tensor
-                dataset_dict[_key] = roi_infos[_key]
-            else:
-                dataset_dict[_key] = torch.tensor(roi_infos[_key])
+        dataset_dict["bbox_center"] = torch.as_tensor(bbox_center, dtype=torch.float32)
+        dataset_dict["scale"] = scale
+        dataset_dict["bbox"] = anno[bbox_key]  # NOTE: original bbox
+        dataset_dict["roi_wh"] = torch.as_tensor(np.array([bw, bh], dtype=np.float32))
+        dataset_dict["resize_ratio"] = resize_ratio = out_res / scale
 
         return dataset_dict
-
-    def get_current_output_mode(self):
-        return self.__output_mode
-
-    """
-    def __switch_output_mode(self):
-        if self.__output_mode == 'fix':
-            return -1
-        elif self.__output_mode == 'pose':
-            self.__output_mode = 'geo'
-            return 0
-        elif self.__output_mode == 'geo':
-            self.__output_mode = 'pose'
-            return 0
-        else:
-            raise ValueError(self.__output_mode)
-    """
-
-    def step(self):
-        # switch output mode btw {'pose', 'geo'}
-        assert self.split == "train", self.split
-        if np.random.rand() < self.__geo_mode_prob:
-            self.__output_mode = "geo"
-        else:
-            self.__output_mode = "pose"
 
     def __getitem__(self, idx):
         if self.split != "train":

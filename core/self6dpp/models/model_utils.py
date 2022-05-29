@@ -8,8 +8,41 @@ from core.utils.rot_reps import rot6d_to_mat_batch
 from core.utils import lie_algebra, quaternion_lf
 from .net_factory import NECKS, HEADS
 
-
 logger = logging.getLogger(__name__)
+
+
+def get_xyz_doublemask_doublevf_region_out_dim(cfg):
+    net_cfg = cfg.MODEL.POSE_NET
+    g_head_cfg = net_cfg.GEO_HEAD
+    loss_cfg = net_cfg.LOSS_CFG
+
+    xyz_loss_type = loss_cfg.XYZ_LOSS_TYPE
+    if xyz_loss_type in ["MSE", "L1", "L2", "SmoothL1"]:
+        xyz_out_dim = 3
+    elif xyz_loss_type in ["CE_coor", "CE"]:
+        xyz_out_dim = 3 * (g_head_cfg.XYZ_BIN + 1)
+    else:
+        raise NotImplementedError(f"unknown xyz loss type: {xyz_loss_type}")
+
+    mask_loss_type = loss_cfg.MASK_LOSS_TYPE
+    if mask_loss_type in ["L1", "BCE", "RW_BCE", "dice"]:
+        mask_out_dim = 2
+    elif mask_loss_type in ["CE"]:
+        mask_out_dim = 4
+    else:
+        raise NotImplementedError(f"unknown mask loss type: {mask_loss_type}")
+
+    vf_loss_type = loss_cfg.VF_LOSS_TYPE
+    if vf_loss_type in ["MSE", "L1", "L2", "SmoothL1", "L1+Cos"]:
+        vf_out_dim = 2 * 2 * g_head_cfg.NUM_CHANNAL_VF  # {u, v} * {vis, full} * N_fps
+    else:
+        raise NotImplementedError(f"unknown vf loss type: {vf_loss_type}")
+
+    region_out_dim = g_head_cfg.NUM_REGIONS + 1
+    # at least 2 regions (with bg, at least 3 regions)
+    assert region_out_dim > 2, region_out_dim
+
+    return xyz_out_dim, mask_out_dim, region_out_dim, vf_out_dim
 
 
 def get_xyz_doublemask_region_out_dim(cfg):
@@ -134,6 +167,20 @@ def get_geo_head(cfg):
             xyz_out_dim=xyz_dim,
             mask_out_dim=mask_dim,
         )
+    elif "DoubleMask" in geo_head_type and "DoubleVF" in geo_head_type:
+        xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
+        region_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.REGION_CLASS_AWARE else 1
+        vf_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.VF_CLASS_AWARE else 1
+        geo_head_init_cfg.update(
+            xyz_num_classes=xyz_num_classes,
+            mask_num_classes=mask_num_classes,
+            region_num_classes=region_num_classes,
+            vf_num_classes=vf_num_classes,
+            xyz_out_dim=xyz_dim,
+            mask_out_dim=mask_dim,
+            region_out_dim=region_dim,
+            vf_out_dim=vf_dim,
+        )
     elif "DoubleMask" in geo_head_type:
         xyz_dim, mask_dim, region_dim = get_xyz_doublemask_region_out_dim(cfg)
         region_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.REGION_CLASS_AWARE else 1
@@ -179,7 +226,7 @@ def get_pnp_net(cfg):
     pnp_net_cfg = net_cfg.PNP_NET
     loss_cfg = net_cfg.LOSS_CFG
 
-    xyz_dim, mask_dim, region_dim = get_xyz_mask_region_out_dim(cfg)
+    xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
 
     if loss_cfg.XYZ_LOSS_TYPE in ["CE_coor", "CE"]:
         pnp_net_in_channel = xyz_dim - 3  # for bin xyz, no bg channel
@@ -193,7 +240,16 @@ def get_pnp_net(cfg):
         pnp_net_in_channel += g_head_cfg.NUM_REGIONS
 
     if pnp_net_cfg.MASK_ATTENTION in ["concat"]:  # do not add dim for none/mul
-        pnp_net_in_channel += 1
+        pnp_net_in_channel += 2
+
+    if pnp_net_cfg.WITH_VF in ["visib", "full"]:
+        pnp_net_in_channel += 2 * g_head_cfg.NUM_CHANNAL_VF
+    elif pnp_net_cfg.WITH_VF == "both":
+        pnp_net_in_channel += 4 * g_head_cfg.NUM_CHANNAL_VF
+    elif pnp_net_cfg.WITH_VF == "none":
+        pass
+    else:
+        raise ValueError(f"Unknown ROT_TYPE: {pnp_net_cfg.WITH_VF}")
 
     if pnp_net_cfg.ROT_TYPE in ["allo_quat", "ego_quat"]:
         rot_dim = 4
@@ -212,7 +268,13 @@ def get_pnp_net(cfg):
     pnp_net_init_cfg = copy.deepcopy(pnp_net_cfg.INIT_CFG)
     pnp_head_type = pnp_net_init_cfg.pop("type")
 
-    if pnp_head_type in ["ConvPnPNet", "ConvPnPNetCls"]:
+    if pnp_head_type == "ConvPnPNetAll":
+        pnp_net_init_cfg.update(
+            nIn=pnp_net_in_channel,
+            rot_dim=rot_dim,
+            mask_attention_type=pnp_net_cfg.MASK_ATTENTION,
+        )
+    elif pnp_head_type in ["ConvPnPNet", "ConvPnPNetCls"]:
         pnp_net_init_cfg.update(
             nIn=pnp_net_in_channel,
             rot_dim=rot_dim,
@@ -236,6 +298,7 @@ def get_pnp_net(cfg):
         raise ValueError(f"Unknown pnp head type: {pnp_head_type}")
 
     pnp_net = HEADS[pnp_head_type](**pnp_net_init_cfg)
+
     params_lr_list = []
     if pnp_net_cfg.FREEZE:
         for param in pnp_net.parameters():
