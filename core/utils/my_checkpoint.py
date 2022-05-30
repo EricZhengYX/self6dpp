@@ -1,6 +1,6 @@
 import pickle
 import os
-from detectron2.utils.file_io import PathManager
+# from detectron2.utils.file_io import PathManager
 from detectron2.checkpoint import DetectionCheckpointer
 from mmcv.runner.checkpoint import (
     _load_checkpoint,
@@ -22,7 +22,8 @@ class MyCheckpointer(DetectionCheckpointer):
 
     def _load_file(self, filename):
         if filename.endswith(".pkl"):
-            with PathManager.open(filename, "rb") as f:
+            # with PathManager.open(filename, "rb") as f:
+            with open(filename, "rb") as f:
                 data = pickle.load(f, encoding="latin1")
             if "model" in data and "__author__" in data:
                 # file is in Detectron2 model zoo format

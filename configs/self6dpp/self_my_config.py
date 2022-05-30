@@ -64,7 +64,7 @@ SOLVER = dict(
 
 DATASETS = dict(
     TRAIN=("lm_real_ape_train",),  # real data
-    TRAIN2=("lm_pbr_ape_train",),  # synthetic data
+    TRAIN2=(),  # synthetic data    "lm_pbr_ape_train",
     TRAIN2_RATIO=0.0,
     TEST=("lm_real_ape_test",),
     # for self-supervised training

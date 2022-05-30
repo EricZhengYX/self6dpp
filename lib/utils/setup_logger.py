@@ -2,13 +2,16 @@
 # modified from detectron2.utils.logger
 # support showing line number and debug mode color
 import functools
+
+import mmcv
+
 from lib.utils.utils import get_time_str
 import logging
 import os
 import os.path as osp
 import sys
 from collections import Counter
-from detectron2.utils.file_io import PathManager
+# from detectron2.utils.file_io import PathManager
 from tabulate import tabulate
 from termcolor import colored
 import datetime
@@ -95,7 +98,8 @@ def setup_my_logger(output=None, distributed_rank=0, *, color=True, name="mylib"
             filename = osp.join(output, f"log_{get_time_str()}.txt")
         if distributed_rank > 0:
             filename = filename + ".rank{}".format(distributed_rank)
-        PathManager.mkdirs(osp.dirname(filename))
+        # PathManager.mkdirs(osp.dirname(filename))
+        mmcv.mkdir_or_exist(osp.dirname(filename))
 
         fh = logging.StreamHandler(_cached_log_stream(filename))
         fh.setLevel(logging.DEBUG)
@@ -109,7 +113,8 @@ def setup_my_logger(output=None, distributed_rank=0, *, color=True, name="mylib"
 # with the same file name can safely write to the same file.
 @functools.lru_cache(maxsize=None)
 def _cached_log_stream(filename):
-    return PathManager.open(filename, "a")
+    # return PathManager.open(filename, "a")
+    return open(filename, "a")
 
 
 """

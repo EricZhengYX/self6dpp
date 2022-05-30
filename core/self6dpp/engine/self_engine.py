@@ -3,7 +3,6 @@ import os
 import os.path as osp
 import torch
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
 import mmcv
 from mmcv.runner.checkpoint import load_checkpoint
 import time
@@ -274,10 +273,6 @@ def do_train(
         cfg, optimizer, total_iters=max_iter // accumulate_iter
     )
 
-    AMP_ON = cfg.SOLVER.AMP.ENABLED
-    logger.info(f"AMP enabled: {AMP_ON}")
-    grad_scaler = GradScaler()
-
     # resume or load model ===================================
     # teacher/student initialized by the same weights (only load teacher for train)
     assert osp.exists(cfg.MODEL.WEIGHTS), cfg.MODEL.WEIGHTS
@@ -287,7 +282,6 @@ def do_train(
         model_teacher=model_teacher,  # NOTE: teacher
         optimizer=optimizer,
         scheduler=scheduler,
-        gradscaler=grad_scaler,
         save_to_disk=comm.is_main_process(),
     )
     start_iter = (
@@ -429,32 +423,31 @@ def do_train(
                     net_cfg.XYZ_ONLINE is False
                 ), "Use offline xyz labels for self-supervised training!"
                 batch = batch_data(cfg, data, renderer=None)
-                with autocast(enabled=AMP_ON):
-                    out_dict, loss_dict = model(
-                        batch["roi_img"],
-                        gt_xyz=batch.get("roi_xyz", None),
-                        gt_xyz_bin=batch.get("roi_xyz_bin", None),
-                        gt_mask_trunc=batch["roi_mask_trunc"],
-                        gt_mask_visib=batch["roi_mask_visib"],
-                        gt_mask_obj=batch["roi_mask_obj"],
-                        gt_mask_full=batch.get("roi_mask_full", None),
-                        gt_region=batch.get("roi_region", None),
-                        gt_ego_rot=batch.get("ego_rot", None),
-                        gt_trans=batch.get("trans", None),
-                        gt_trans_ratio=batch["roi_trans_ratio"],
-                        gt_points=batch.get("roi_points", None),
-                        sym_infos=batch.get("sym_info", None),
-                        roi_classes=batch["roi_cls"],
-                        roi_cams=batch["roi_cam"],
-                        roi_whs=batch["roi_wh"],
-                        roi_centers=batch["roi_center"],
-                        resize_ratios=batch["resize_ratio"],
-                        roi_coord_2d=batch.get("roi_coord_2d", None),
-                        roi_extents=batch.get("roi_extent", None),
-                        do_loss=True,
-                    )
-                    losses = sum(loss_dict.values())
-                    assert torch.isfinite(losses).all(), loss_dict
+                out_dict, loss_dict = model(
+                    batch["roi_img"],
+                    gt_xyz=batch.get("roi_xyz", None),
+                    gt_xyz_bin=batch.get("roi_xyz_bin", None),
+                    gt_mask_trunc=batch["roi_mask_trunc"],
+                    gt_mask_visib=batch["roi_mask_visib"],
+                    gt_mask_obj=batch["roi_mask_obj"],
+                    gt_mask_full=batch.get("roi_mask_full", None),
+                    gt_region=batch.get("roi_region", None),
+                    gt_ego_rot=batch.get("ego_rot", None),
+                    gt_trans=batch.get("trans", None),
+                    gt_trans_ratio=batch["roi_trans_ratio"],
+                    gt_points=batch.get("roi_points", None),
+                    sym_infos=batch.get("sym_info", None),
+                    roi_classes=batch["roi_cls"],
+                    roi_cams=batch["roi_cam"],
+                    roi_whs=batch["roi_wh"],
+                    roi_centers=batch["roi_center"],
+                    resize_ratios=batch["resize_ratio"],
+                    roi_coord_2d=batch.get("roi_coord_2d", None),
+                    roi_extents=batch.get("roi_extent", None),
+                    do_loss=True,
+                )
+                losses = sum(loss_dict.values())
+                assert torch.isfinite(losses).all(), loss_dict
 
                 loss_dict_reduced = {
                     k: v.item() for k, v in comm.reduce_dict(loss_dict).items()
@@ -469,23 +462,22 @@ def do_train(
                     loss_mode=this_iter_data_mode,
                     model_teacher=model_teacher,
                 )
-                with autocast(enabled=AMP_ON):
-                    # only outputs, no losses
-                    out_dict = model(
-                        batch["roi_img"],
-                        gt_points=batch.get("roi_points", None),
-                        sym_infos=batch.get("sym_info", None),
-                        roi_classes=batch.get("roi_cls", None),
-                        roi_cams=batch.get("roi_cam", None),
-                        roi_whs=batch.get("roi_wh", None),
-                        roi_centers=batch.get("roi_center", None),
-                        resize_ratios=batch.get("resize_ratio", None),
-                        roi_coord_2d=batch.get("roi_coord_2d", None),
-                        roi_extents=batch.get("roi_extent", None),
-                        do_loss=False,
-                        do_self=True,
-                        loss_mode=this_iter_data_mode,
-                    )
+                # only outputs, no losses
+                out_dict = model(
+                    batch["roi_img"],
+                    gt_points=batch.get("roi_points", None),
+                    sym_infos=batch.get("sym_info", None),
+                    roi_classes=batch.get("roi_cls", None),
+                    roi_cams=batch.get("roi_cam", None),
+                    roi_whs=batch.get("roi_wh", None),
+                    roi_centers=batch.get("roi_center", None),
+                    resize_ratios=batch.get("resize_ratio", None),
+                    roi_coord_2d=batch.get("roi_coord_2d", None),
+                    roi_extents=batch.get("roi_extent", None),
+                    do_loss=False,
+                    do_self=True,
+                    loss_mode=this_iter_data_mode,
+                )
                 # compute self-supervised losses
 
                 loss_dict = compute_self_loss(
@@ -555,41 +547,23 @@ def do_train(
             # ------------------------------------------------------------------
             # backward & optimize
             # ------------------------------------------------------------------
-            if AMP_ON:
-                grad_scaler.scale(losses).backward()
-
-                # # Unscales the gradients of optimizer's assigned params in-place
-                # grad_scaler.unscale_(optimizer)
-                # # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-                # optimize
-                if iteration % accumulate_iter == 0:
-                    if comm._USE_HVD:
-                        optimizer.synchronize()
-                        with optimizer.skip_synchronize():
-                            grad_scaler.step(optimizer)
-                            grad_scaler.update()
-                    else:
-                        grad_scaler.step(optimizer)
-                        grad_scaler.update()
-            else:
-                losses.backward()
-                # optimize
-                if iteration % accumulate_iter == 0:
-                    # set nan grads to 0
-                    for param in model.parameters():
-                        if param.grad is not None:
-                            nan_to_num(
-                                param.grad,
-                                nan=0,
-                                posinf=1e5,
-                                neginf=-1e5,
-                                out=param.grad,
-                            )
-                    total_norm = nn.utils.clip_grad_norm_(
-                        model.parameters(), max_norm=clip_grad
-                    )
-                    optimizer.step()
+            losses.backward()
+            # optimize
+            if iteration % accumulate_iter == 0:
+                # set nan grads to 0
+                for param in model.parameters():
+                    if param.grad is not None:
+                        nan_to_num(
+                            param.grad,
+                            nan=0,
+                            posinf=1e5,
+                            neginf=-1e5,
+                            out=param.grad,
+                        )
+                total_norm = nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=clip_grad
+                )
+                optimizer.step()
 
             if iteration % accumulate_iter == 0:
                 optimizer.zero_grad(set_to_none=True)

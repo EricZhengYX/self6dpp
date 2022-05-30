@@ -7,7 +7,7 @@ from mmcv import DictAction
 import torch
 import PIL
 from detectron2.utils.env import seed_all_rng
-from detectron2.utils.file_io import PathManager
+# from detectron2.utils.file_io import PathManager
 from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.logger import setup_logger
 from core.utils import my_comm as comm
@@ -105,7 +105,8 @@ def my_default_setup(cfg, args):
     """
     output_dir = cfg.OUTPUT_DIR
     if comm.is_main_process() and output_dir:
-        PathManager.mkdirs(output_dir)
+        # PathManager.mkdirs(output_dir)
+        mmcv.mkdir_or_exist(output_dir)
 
     rank = comm.get_rank()
     setup_logger(output_dir, distributed_rank=rank, name="fvcore")
@@ -119,7 +120,8 @@ def my_default_setup(cfg, args):
         logger.info(
             "Contents of args.config_file={}:\n{}".format(
                 args.config_file,
-                PathManager.open(args.config_file, "r").read(),
+                # PathManager.open(args.config_file, "r").read(),
+                mmcv.fopen(args.config_file).read(),
             )
         )
 
