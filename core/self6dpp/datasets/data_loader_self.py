@@ -233,12 +233,14 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         cfg = self.cfg
 
         cur_model_points = {}
+        cur_model_normal = {}
         num = np.inf
         for i, obj_name in enumerate(objs):
             obj_id = data_ref.obj2id[obj_name]
             model_path = osp.join(data_ref.model_dir, f"obj_{obj_id:06d}.ply")
             model = inout.load_ply(model_path, vertex_scale=data_ref.vertex_scale)
             cur_model_points[i] = pts = model["pts"]
+            cur_model_normal[i] = norms = model["normals"]
             if pts.shape[0] < num:
                 num = pts.shape[0]
 
@@ -460,6 +462,9 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
                 fps_points.astype(np.float32)
             ).contiguous()
 
+        gt_img = self.normalize_image(cfg, gt_img.transpose(2, 0, 1))
+        dataset_dict["gt_img"] = torch.as_tensor(gt_img.astype("float32")).contiguous()
+
         if self.__output_mode == "geo":
             """
             making 'pose-variated data augmentations', for following nparrays:
@@ -493,9 +498,6 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
 
             dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()
             dataset_dict["roi_gt_img"] = torch.as_tensor(roi_gt_img.astype("float32")).contiguous()
-
-            gt_img = self.normalize_image(cfg, gt_img.transpose(2, 0, 1))
-            dataset_dict["gt_img"] = torch.as_tensor(gt_img.astype("float32")).contiguous()
 
             dataset_dict["roi_points"] = torch.as_tensor(
                 self._get_model_points(dataset_name)[roi_cls].astype("float32")

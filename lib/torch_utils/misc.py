@@ -6,7 +6,7 @@ import torch
 # ----------------------------------------------------------------------------
 # Replace NaN/Inf with specified numerical values.
 # (from https://github.com/NVlabs/stylegan2-ada-pytorch/blob/main/torch_utils/misc.py)
-
+"""
 try:
     nan_to_num = torch.nan_to_num  # 1.8.0a0
 except AttributeError:
@@ -19,6 +19,39 @@ except AttributeError:
             neginf = torch.finfo(input.dtype).min
         assert nan == 0
         return torch.clamp(input.unsqueeze(0).nansum(0), min=neginf, max=posinf, out=out)
+"""
+
+if hasattr(torch, "nan_to_num"):  # >=1.8.0
+    nan_to_num = torch.nan_to_num
+elif hasattr(torch, "nansum"):  # 1.8.0 ~ 1.7.0
+
+    def nan_to_num(
+        input, nan=0.0, posinf=None, neginf=None, *, out=None
+    ):  # pylint: disable=redefined-builtin
+        assert isinstance(input, torch.Tensor)
+        if posinf is None:
+            posinf = torch.finfo(input.dtype).max
+        if neginf is None:
+            neginf = torch.finfo(input.dtype).min
+        assert nan == 0
+        return torch.clamp(
+            input.unsqueeze(0).nansum(0), min=neginf, max=posinf, out=out
+        )
+
+
+else:  # lower
+
+    def nan_to_num(
+        input, nan=0.0, posinf=None, neginf=None, *, out=None
+    ):  # pylint: disable=redefined-builtin
+        assert isinstance(input, torch.Tensor)
+        if posinf is None:
+            posinf = torch.finfo(input.dtype).max
+        if neginf is None:
+            neginf = torch.finfo(input.dtype).min
+        assert nan == 0
+        input[torch.isnan(input)] = nan
+        return torch.clamp(input, min=neginf, max=posinf, out=out)
 
 
 def set_nan_to_0(a, name=None, verbose=False):
@@ -32,10 +65,21 @@ def set_nan_to_0(a, name=None, verbose=False):
 # ----------------------------------------------------------------------------
 # Symbolic assert.
 
+"""
 try:
     symbolic_assert = torch._assert  # 1.8.0a0 # pylint: disable=protected-access
 except AttributeError:
     symbolic_assert = torch.Assert  # 1.7.0
+"""
+if hasattr(torch, "_assert"):
+    symbolic_assert = torch._assert  # >= 1.8.0
+elif hasattr(torch, "Assert"):
+    symbolic_assert = torch.Assert  # 1.7.0
+else:  # otherwise just use raw python assertion
+
+    def symbolic_assert(assertion: bool, msg: str):
+        assert assertion, msg
+
 
 # ----------------------------------------------------------------------------
 
@@ -59,7 +103,9 @@ def assert_shape(tensor, ref_shape):
     Performs symbolic assertion when used in torch.jit.trace().
     """
     if tensor.ndim != len(ref_shape):
-        raise AssertionError(f"Wrong number of dimensions: got {tensor.ndim}, expected {len(ref_shape)}")
+        raise AssertionError(
+            f"Wrong number of dimensions: got {tensor.ndim}, expected {len(ref_shape)}"
+        )
     for idx, (size, ref_size) in enumerate(zip(tensor.shape, ref_shape)):
         if ref_size is None:
             pass
@@ -76,4 +122,6 @@ def assert_shape(tensor, ref_shape):
                     f"Wrong size for dimension {idx}: expected {ref_size}",
                 )
         elif size != ref_size:
-            raise AssertionError(f"Wrong size for dimension {idx}: got {size}, expected {ref_size}")
+            raise AssertionError(
+                f"Wrong size for dimension {idx}: got {size}, expected {ref_size}"
+            )

@@ -226,7 +226,10 @@ def get_pnp_net(cfg):
     pnp_net_cfg = net_cfg.PNP_NET
     loss_cfg = net_cfg.LOSS_CFG
 
-    xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
+    if pnp_net_cfg.get("WITH_VF", "none") != "none":
+        xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
+    else:
+        xyz_dim, mask_dim, region_dim = get_xyz_doublemask_region_out_dim(cfg)
 
     if loss_cfg.XYZ_LOSS_TYPE in ["CE_coor", "CE"]:
         pnp_net_in_channel = xyz_dim - 3  # for bin xyz, no bg channel
@@ -242,12 +245,12 @@ def get_pnp_net(cfg):
     if pnp_net_cfg.MASK_ATTENTION in ["concat"]:  # do not add dim for none/mul
         pnp_net_in_channel += 2
 
-    if pnp_net_cfg.WITH_VF in ["visib", "full"]:
+    if not hasattr(pnp_net_cfg, "WITH_VF") or pnp_net_cfg.WITH_VF == "none":
+        pass
+    elif pnp_net_cfg.WITH_VF in ["visib", "full"]:
         pnp_net_in_channel += 2 * g_head_cfg.NUM_CHANNAL_VF
     elif pnp_net_cfg.WITH_VF == "both":
         pnp_net_in_channel += 4 * g_head_cfg.NUM_CHANNAL_VF
-    elif pnp_net_cfg.WITH_VF == "none":
-        pass
     else:
         raise ValueError(f"Unknown ROT_TYPE: {pnp_net_cfg.WITH_VF}")
 

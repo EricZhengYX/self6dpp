@@ -18,6 +18,7 @@ from detectron2.engine import launch
 from detectron2.data import MetadataCatalog
 from mmcv import Config
 import cv2
+from loguru import logger as loguru_logger
 
 cv2.setNumThreads(0)  # pytorch issue 1355: possible deadlock in dataloader
 # OpenCL may be enabled by default in OpenCV3; disable it because it's not
@@ -144,6 +145,7 @@ def setup(args):
     return cfg
 
 
+@loguru_logger.catch
 def main(args):
     cfg = setup(args)
 

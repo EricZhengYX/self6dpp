@@ -409,6 +409,8 @@ def do_train(
                 do_self = True
                 this_iter_data_mode = data_loader.dataset.get_current_output_mode()
 
+            storage.put_scalar("forward_mode", 0 if this_iter_data_mode == "pose" else 1, smoothing_hint=False)
+
             if iter_time is not None:
                 storage.put_scalar("time", time.perf_counter() - iter_time)
             iter_time = time.perf_counter()
@@ -563,6 +565,7 @@ def do_train(
                 total_norm = nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=clip_grad
                 )
+                storage.put_scalar("total_grad_norm", float(total_norm), smoothing_hint=False)
                 optimizer.step()
 
             if iteration % accumulate_iter == 0:
@@ -584,7 +587,7 @@ def do_train(
                 loss_val = float(value)
                 tbx_writer.add_scalar(loss_name, loss_val, iteration)
             # grad-norm
-            tbx_writer.add_scalar("Grad/total_norm", total_norm.item(), iteration)
+            tbx_writer.add_scalar("Grad/total_norm", float(total_norm), iteration)
 
             # ------------------------------------------------------------------
             # update teacher model using ema
@@ -610,6 +613,8 @@ def do_train(
                     tbx_writer.add_text(
                         "Eval metrics/{}".format(title), tb_eval_markdown_str, iteration
                     )
+
+                torch.save(model.state_dict(), "student_{}.pth".format(epoch))
                 # Compared to "train_net.py", the test results are not dumped to EventStorage
                 comm.synchronize()
 

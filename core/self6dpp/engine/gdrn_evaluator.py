@@ -14,7 +14,7 @@ import mmcv
 import numpy as np
 import ref
 import torch
-from torch.cuda.amp import autocast
+# from torch.cuda.amp import autocast
 from transforms3d.quaternions import quat2mat
 
 from detectron2.data import MetadataCatalog, DatasetCatalog
@@ -567,6 +567,8 @@ def gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=False
     Returns:
         The return value of `evaluator.evaluate()`
     """
+    assert not amp_test, "For compatibility with pytorch==1.4.0, amp is not available"
+
     num_devices = get_world_size()
     logger = logging.getLogger(__name__)
     logger.info("Start inference on {} images".format(len(data_loader)))
@@ -609,18 +611,19 @@ def gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=False
             #         show_titles.extend(["coord_2d_x", "coord_2d_y"])
             #         grid_show(show_ims, show_titles, row=1, col=3)
 
-            with autocast(enabled=amp_test):  # gdrn amp_test seems slower
-                out_dict = model(
-                    batch["roi_img"],
-                    roi_classes=batch["roi_cls"],
-                    roi_cams=batch["roi_cam"],
-                    roi_whs=batch["roi_wh"],
-                    roi_centers=batch["roi_center"],
-                    resize_ratios=batch["resize_ratio"],
-                    roi_coord_2d=batch.get("roi_coord_2d", None),
-                    roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-                    roi_extents=batch.get("roi_extent", None),
-                )
+            out_dict = model(
+                batch["roi_img"],
+                roi_classes=batch["roi_cls"],
+                roi_cams=batch["roi_cam"],
+                roi_whs=batch["roi_wh"],
+                roi_centers=batch["roi_center"],
+                resize_ratios=batch["resize_ratio"],
+                roi_coord_2d=batch.get("roi_coord_2d", None),
+                roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
+                roi_extents=batch.get("roi_extent", None),
+                do_self=False,
+                loss_mode='pose',
+            )
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             cur_compute_time = time.perf_counter() - start_compute_time
@@ -696,6 +699,8 @@ def gdrn_save_result_of_dataset(cfg, model, data_loader, output_dir, dataset_nam
     Returns:
         The return value of `evaluator.evaluate()`
     """
+    assert not amp_test, "For compatibility with pytorch==1.4.0, amp is not available"
+
     num_devices = get_world_size()
     logger = logging.getLogger(__name__)
     logger.info("Start inference on {} images".format(len(data_loader)))
@@ -753,25 +758,26 @@ def gdrn_save_result_of_dataset(cfg, model, data_loader, output_dir, dataset_nam
                 if all(_obj not in train_objs for _obj in cur_obj_names):
                     continue
             # NOTE: do model inference -----------------------------
-            with autocast(enabled=amp_test):  # gdrn amp_test seems slower
-                out_dict = model(
-                    batch["roi_img"],
-                    roi_classes=batch["roi_cls"],
-                    roi_cams=batch["roi_cam"],
-                    roi_whs=batch["roi_wh"],
-                    roi_centers=batch["roi_center"],
-                    resize_ratios=batch["resize_ratio"],
-                    roi_coord_2d=batch.get("roi_coord_2d", None),
-                    roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-                    roi_extents=batch.get("roi_extent", None),
-                )
+            out_dict = model(
+                batch["roi_img"],
+                roi_classes=batch["roi_cls"],
+                roi_cams=batch["roi_cam"],
+                roi_whs=batch["roi_wh"],
+                roi_centers=batch["roi_center"],
+                resize_ratios=batch["resize_ratio"],
+                roi_coord_2d=batch.get("roi_coord_2d", None),
+                roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
+                roi_extents=batch.get("roi_extent", None),
+                do_self=False,
+                loss_mode='pose',
+            )
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             cur_compute_time = time.perf_counter() - start_compute_time
             total_compute_time += cur_compute_time
 
             # convert raw mask (out size) to mask in image ---------------------------------------------------------------------
-            raw_masks = out_dict["mask"]
+            raw_masks = out_dict["vis_mask"]
             mask_probs = get_out_mask(cfg, raw_masks)
 
             # for crop and resize

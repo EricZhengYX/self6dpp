@@ -277,6 +277,13 @@ class Renderer_dibr(object):
         ret["prob"] = im_prob.squeeze(-1)
         ret["mask"] = im_mask.squeeze(-1)
 
+        if "norm" in mode:
+            norms = [model["normals"][None] for model in models]
+            _ren_norms, _, _, _ = self.dib_ren.forward(points=points, colors=norms)
+            ren_norms_shift = _ren_norms - _ren_norms.min()
+            ren_norms = ren_norms_shift / (torch.norm(ren_norms_shift, dim=-1, keepdim=True) + 1e-5) * im_mask
+            ret["norm"] = ren_norms
+
         if "depth" in mode:
             # transform xyz
             if not isinstance(Rs, torch.Tensor):

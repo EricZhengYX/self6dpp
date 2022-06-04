@@ -69,30 +69,32 @@ def weighted_ex_loss_probs(probs, target, weight=None):
     assert probs.size() == target.size()
     pos = torch.gt(target, 0)
     neg = torch.eq(target, 0)
-    probs = probs.clamp(min=1e-7, max=1 - 1e-7)
+    _probs = probs.clamp(min=1e-7, max=1 - 1e-7)
     if weight is not None:
-        pos_loss = -target[pos] * torch.log(probs[pos]) * weight[pos]
-        neg_loss = -(torch.log(1 - probs[neg])) * weight[neg]
+        pos_loss = -target[pos] * torch.log(_probs[pos]) * weight[pos]
+        neg_loss = -(torch.log(1 - _probs[neg])) * weight[neg]
     else:
-        pos_loss = -target[pos] * torch.log(probs[pos])
-        neg_loss = -(torch.log(1 - probs[neg]))
+        pos_loss = -target[pos] * torch.log(_probs[pos])
+        neg_loss = -(torch.log(1 - _probs[neg]))
     if torch.isnan(pos_loss).any():
         # print('pos_loss', pos_loss)
         print(
             "pos_loss nan",
-            target.min(),
-            target.max(),
-            probs.min(),
-            probs.max(),
+            "{}/{}".format(pos.sum().item(), pos.numel()),
+            target.min().item(),
+            target.max().item(),
+            _probs.min().item(),
+            _probs.max().item(),
         )
     if torch.isnan(neg_loss).any():
         # print('neg_loss', neg_loss)
         print(
             "neg_loss nan",
-            target.min(),
-            target.max(),
-            probs.min(),
-            probs.max(),
+            "{}/{}".format(neg.sum().item(), neg.numel()),
+            target.min().item(),
+            target.max().item(),
+            _probs.min().item(),
+            _probs.max().item(),
         )
 
     loss = 0.0

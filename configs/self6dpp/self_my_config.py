@@ -52,6 +52,7 @@ INPUT = dict(
 SOLVER = dict(
     IMS_PER_BATCH=2,  # 6, maybe need to be < 24
     TOTAL_EPOCHS=100,
+    CHECKPOINT_PERIOD=30,
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
@@ -66,28 +67,44 @@ DATASETS = dict(
     TRAIN=("lm_real_ape_train",),  # real data
     TRAIN2=(),  # synthetic data    "lm_pbr_ape_train",
     TRAIN2_RATIO=0.0,
-    TEST=("lm_real_ape_test",),
+    TEST=("lm_real_ape_test",),  # lmo_test lm_real_ape_test
     # for self-supervised training
     DET_FILES_TRAIN=(
         "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lm_13_train.json",
     ),
     DET_THR_TRAIN=0.5,
     DET_FILES_TEST=(
+        # "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
         "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
     ),
 )
+'''
+DATASETS = dict(
+    TRAIN=("lmo_NoBopTest_ape_train",),  # real data
+    TRAIN2=("lmo_pbr_ape_train",),  # synthetic data
+    TRAIN2_RATIO=0.0,
+    TEST=("lmo_bop_test",),
+    # for self-supervised training
+    DET_FILES_TRAIN=(
+        "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
+    ),
+    DET_THR_TRAIN=0.5,
+    DET_FILES_TEST=(
+        "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
+    ),
+)
+'''
 
 RENDERER = dict(
     ENABLE=False,
     DIFF_RENDERER="new_DIBR",
 )  # DIBR | dibr | new_DIBR
-
 MODEL = dict(
     # synthetically trained model
-    WEIGHTS="/home/eric/tb_remote/sd_model_0086949.pth",
+    WEIGHTS="datasets/s6dpp/state_dict_0130424_5867_3504.pth",
     # init
     # ad10    rete5    te2
-    # 50.86   98.57    91.81
+    # 57.90   57.24    85.33
     REFINER_WEIGHTS="",
     FREEZE_BN=True,
     SELF_TRAIN=True,  # whether to do self-supervised training
@@ -192,6 +209,9 @@ MODEL = dict(
             MASK_INIT_REN_LOSS_TYPE="RW_BCE",
             # MASK_INIT_REN_LOSS_TYPE="dice",
             MASK_INIT_REN_LW=1.0,
+            # mask loss (init, pred) -----------------------
+            MASK_INIT_PRED_LOSS_TYPE="vis+full",
+            MASK_INIT_PRED_LW=1.0,
             # depth-based geometric loss ------
             GEOM_LOSS_TYPE="chamfer",  # chamfer
             GEOM_LW=0.0,
@@ -215,7 +235,7 @@ TRAIN = dict(
 )
 
 TEST = dict(
-    EVAL_PERIOD=1,  # count in epochs
+    EVAL_PERIOD=20,  # count in epochs
     VIS=False,
     TEST_BBOX_TYPE="est"
 )  # gt | est

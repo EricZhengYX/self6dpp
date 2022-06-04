@@ -64,10 +64,10 @@ SOLVER = dict(
 
 DATASETS = dict(
     TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train, lmo_test, lm_real_ape_test
-    TEST=("lm_real_ape_test",),
+    TEST=("lmo_test",),  # lmo_test lm_real_ape_test
     DET_FILES_TEST=(
-        # "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
-        "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
+        "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
+        # "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
     ),
 )
 

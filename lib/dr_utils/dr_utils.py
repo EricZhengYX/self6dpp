@@ -19,6 +19,7 @@ def load_objs(
     texture_paths=None,
     height=480,
     width=640,
+    centring=True,
     tex_resize=True,
     tex_fmt="CHW",
     tex_vflip=False,
@@ -40,10 +41,11 @@ def load_objs(
         ###########################
         # normalize verts ( - center)
         ###########################
-        vertices_max = vertices.max()
-        vertices_min = vertices.min()
-        vertices_middle = (vertices_max + vertices_min) / 2.0
-        vertices = vertices - vertices_middle
+        if centring:
+            vertices_max = vertices.max()
+            vertices_min = vertices.min()
+            vertices_middle = (vertices_max + vertices_min) / 2.0
+            vertices = vertices - vertices_middle
         model["vertices"] = vertices[None, :, :].cuda()
         model["colors"] = colors[None, :, :].cuda()
         model["faces"] = faces[None, :, :].cuda()  # NOTE: -1

@@ -14,7 +14,6 @@ import mmcv
 import numpy as np
 import ref
 import torch
-from torch.cuda.amp import autocast
 from transforms3d.quaternions import quat2mat
 from detectron2.data import MetadataCatalog, DatasetCatalog
 from detectron2.evaluation import DatasetEvaluator, DatasetEvaluators, inference_context
@@ -286,18 +285,17 @@ def deepim_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=Fal
             poses_est = None
             for refine_i in range(1, n_iter_test + 1):
                 batch_updater(cfg, batch, renderer=evaluator.renderer, poses_est=poses_est, phase="test")
-                with autocast(enabled=amp_test):
-                    out_dict_i = model(
-                        batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
-                        x_ren=batch.get("zoom_x_ren", None),
-                        init_pose=batch["obj_pose_est"],
-                        K_zoom=batch["zoom_K"],
-                        obj_class=batch["obj_cls"],
-                        # obj_extent=batch.get("obj_extent", None),
-                        # roi_coord_2d=batch.get("roi_coord_2d", None),
-                        do_loss=False,
-                        cur_iter=refine_i,
-                    )
+                out_dict_i = model(
+                    batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
+                    x_ren=batch.get("zoom_x_ren", None),
+                    init_pose=batch["obj_pose_est"],
+                    K_zoom=batch["zoom_K"],
+                    obj_class=batch["obj_cls"],
+                    # obj_extent=batch.get("obj_extent", None),
+                    # roi_coord_2d=batch.get("roi_coord_2d", None),
+                    do_loss=False,
+                    cur_iter=refine_i,
+                )
                 poses_est = out_dict_i[f"pose_{refine_i}"]
                 out_dict.update(out_dict_i)
             if torch.cuda.is_available():
@@ -454,18 +452,17 @@ def deepim_save_result_of_dataset(
             poses_est = None
             for refine_i in range(1, n_iter_test + 1):
                 batch_updater(cfg, batch, renderer=renderer, poses_est=poses_est, phase="test")
-                with autocast(enabled=amp_test):
-                    out_dict_i = model(
-                        batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
-                        x_ren=batch.get("zoom_x_ren", None),
-                        init_pose=batch["obj_pose_est"],
-                        K_zoom=batch["zoom_K"],
-                        obj_class=batch["obj_cls"],
-                        # obj_extent=batch.get("obj_extent", None),
-                        # roi_coord_2d=batch.get("roi_coord_2d", None),
-                        do_loss=False,
-                        cur_iter=refine_i,
-                    )
+                out_dict_i = model(
+                    batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
+                    x_ren=batch.get("zoom_x_ren", None),
+                    init_pose=batch["obj_pose_est"],
+                    K_zoom=batch["zoom_K"],
+                    obj_class=batch["obj_cls"],
+                    # obj_extent=batch.get("obj_extent", None),
+                    # roi_coord_2d=batch.get("roi_coord_2d", None),
+                    do_loss=False,
+                    cur_iter=refine_i,
+                )
                 poses_est = out_dict_i[f"pose_{refine_i}"]
                 out_dict.update(out_dict_i)
             if torch.cuda.is_available():

@@ -10,7 +10,7 @@ import torch
 
 from detectron2.engine.train_loop import HookBase
 from detectron2.utils.events import EventWriter, get_event_storage
-from detectron2.utils.file_io import PathManager
+# from detectron2.utils.file_io import PathManager
 from core.utils import my_comm as comm
 
 
@@ -212,11 +212,23 @@ class MyCommonMetricPrinter(EventWriter):
         except KeyError:
             total_grad_norm_str = ""
 
+        try:
+            forward_mode_idx = storage.history("forward_mode").latest()
+            if forward_mode_idx == 0:
+                forward_mode_str = "forward_mode: pose"
+            elif forward_mode_idx == 1:
+                forward_mode_str = "forward_mode: geo"
+            else:
+                forward_mode_str = "unknown forward_mode: {}".format(forward_mode_idx)
+        except KeyError:
+            forward_mode_str = ""
+
         # NOTE: max_mem is parsed by grep in "dev/parse_results.sh"
         self.logger.info(
             """{eta}{eta_next_eval}{eta_next_ckpt}{epoch}iter: {iter}/{max_iter}[{percent:.1f}%] \
 {time}{data_time}lr: {lr} {memory} \
 {total_grad_norm} \
+{forward_mode} \
 {losses} \
 """.format(
                 eta=f"eta: {eta_string}  " if eta_string else "",
@@ -238,6 +250,7 @@ class MyCommonMetricPrinter(EventWriter):
                 lr=lr,
                 memory="max_mem: {:.0f}M".format(max_mem_mb) if max_mem_mb is not None else "",
                 total_grad_norm=total_grad_norm_str,
+                forward_mode=forward_mode_str,
             )
         )
 
@@ -293,7 +306,8 @@ class MyJSONWriter(EventWriter):
             window_size (int): the window size of median smoothing for the scalars whose
                 `smoothing_hint` are True.
         """
-        self._file_handle = PathManager.open(json_file, "a")
+        # self._file_handle = PathManager.open(json_file, "a")
+        self._file_handle = open(json_file, "a")
         self._window_size = window_size
 
     def write(self):

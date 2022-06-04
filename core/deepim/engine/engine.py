@@ -2,7 +2,6 @@ import logging
 import os
 import os.path as osp
 import torch
-from torch.cuda.amp import autocast, GradScaler
 import mmcv
 import time
 import numpy as np
@@ -203,17 +202,12 @@ def do_train(cfg, args, model, optimizer, renderer, resume=False):
     dprint("total iters: ", max_iter)
     scheduler = solver_utils.build_lr_scheduler(cfg, optimizer, total_iters=max_iter)
 
-    AMP_ON = cfg.SOLVER.AMP.ENABLED
-    logger.info(f"AMP enabled: {AMP_ON}")
-    grad_scaler = GradScaler()
-
     # resume or load model ===================================
     checkpointer = MyCheckpointer(
         model,
         cfg.OUTPUT_DIR,
         optimizer=optimizer,
         scheduler=scheduler,
-        gradscaler=grad_scaler,
         save_to_disk=comm.is_main_process(),
     )
     start_iter = checkpointer.resume_or_load(cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
@@ -265,7 +259,7 @@ def do_train(cfg, args, model, optimizer, renderer, resume=False):
     logger.info("Starting training from iteration {}".format(start_iter))
     iter_time = None
     with EventStorage(start_iter) as storage:
-        optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad()
         for iteration in range(start_iter, max_iter):
             storage.iter = iteration
             epoch = iteration // iters_per_epoch + 1  # epoch start from 1
@@ -296,28 +290,27 @@ def do_train(cfg, args, model, optimizer, renderer, resume=False):
                 if cfg.TRAIN.VIS:
                     vis_batch(cfg, batch, phase="train")
                 # forward ============================================================
-                with autocast(enabled=AMP_ON):
-                    out_dict, loss_dict = model(
-                        batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
-                        x_ren=batch.get("zoom_x_ren", None),
-                        K_zoom=batch["zoom_K"],
-                        init_pose=batch["obj_pose_est"],
-                        obj_class=batch["obj_cls"],
-                        gt_mask_trunc=batch.get("zoom_trunc_mask", None),
-                        gt_mask_visib=batch.get("zoom_visib_mask", None),
-                        # gt_mask_full=batch["zoom_full_mask"],
-                        gt_ego_rot=batch["obj_pose"][:, :3, :3],
-                        gt_trans=batch["obj_pose"][:, :3, 3],
-                        gt_points=batch.get("obj_points", None),
-                        obj_extent=batch.get("obj_extent", None),
-                        sym_info=batch.get("sym_info", None),
-                        gt_flow=batch.get("zoom_flow", None),
-                        # roi_coord_2d=batch.get("roi_coord_2d", None),
-                        do_loss=True,
-                        cur_iter=refine_i,
-                    )
-                    losses = sum(loss_dict.values())
-                    assert torch.isfinite(losses).all(), loss_dict
+                out_dict, loss_dict = model(
+                    batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
+                    x_ren=batch.get("zoom_x_ren", None),
+                    K_zoom=batch["zoom_K"],
+                    init_pose=batch["obj_pose_est"],
+                    obj_class=batch["obj_cls"],
+                    gt_mask_trunc=batch.get("zoom_trunc_mask", None),
+                    gt_mask_visib=batch.get("zoom_visib_mask", None),
+                    # gt_mask_full=batch["zoom_full_mask"],
+                    gt_ego_rot=batch["obj_pose"][:, :3, :3],
+                    gt_trans=batch["obj_pose"][:, :3, 3],
+                    gt_points=batch.get("obj_points", None),
+                    obj_extent=batch.get("obj_extent", None),
+                    sym_info=batch.get("sym_info", None),
+                    gt_flow=batch.get("zoom_flow", None),
+                    # roi_coord_2d=batch.get("roi_coord_2d", None),
+                    do_loss=True,
+                    cur_iter=refine_i,
+                )
+                losses = sum(loss_dict.values())
+                assert torch.isfinite(losses).all(), loss_dict
 
                 poses_est = out_dict[f"pose_{refine_i}"].detach()  # gradient not needed
 
@@ -327,29 +320,13 @@ def do_train(cfg, args, model, optimizer, renderer, resume=False):
                     storage.put_scalars(**{f"iter{refine_i}/total_loss": losses_reduced})
                     storage.put_scalars(**loss_dict_reduced)
 
-                if AMP_ON:
-                    grad_scaler.scale(losses).backward()
-
-                    # # Unscales the gradients of optimizer's assigned params in-place
-                    # grad_scaler.unscale_(optimizer)
-                    # # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                    # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-                    if comm._USE_HVD:
-                        optimizer.synchronize()
-                        with optimizer.skip_synchronize():
-                            grad_scaler.step(optimizer)
-                            grad_scaler.update()
-                    else:
-                        grad_scaler.step(optimizer)
-                        grad_scaler.update()
-                else:
-                    losses.backward()
-                    # set nan grads to 0
-                    for param in model.parameters():
-                        if param.grad is not None:
-                            nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
-                    optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+                losses.backward()
+                # set nan grads to 0
+                for param in model.parameters():
+                    if param.grad is not None:
+                        nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
+                optimizer.step()
+                optimizer.zero_grad()
             # end of refine loop ------------------------------------------------------------------------------------
             storage.put_scalar("lr", optimizer.param_groups[0]["lr"], smoothing_hint=False)
             scheduler.step()

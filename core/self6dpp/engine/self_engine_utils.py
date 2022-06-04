@@ -126,11 +126,9 @@ def compute_self_loss_geo(
 
     # visible mask
     pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
-    pseudo_vis_mask_in_im = (batch["pseudo_mask_prob_in_im"] > 0.5).to(torch.float32)  # BHW
 
     # full mask
     pseudo_full_mask = (batch["pseudo_full_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
-    pseudo_full_mask_in_im = (batch["pseudo_full_mask_prob_in_im"] > 0.5).to(torch.float32)  # BHW
 
     '''
     # mask_weight_in_im was only used for mask loss ren<->pred, not for the mask loss btw teacher<->pred
@@ -227,11 +225,11 @@ def compute_self_loss_geo(
 
     # region vf teacher<->pred loss -------------------------------
     if self_loss_cfg.VIS_VF_LW > 0:
-        vf_loss_vis = vf_loss_func(batch["vis_vf"], pred_vis_vf, pseudo_vis_mask_in_im)
+        vf_loss_vis = vf_loss_func(batch["pseudo_vis_vf"], pred_vis_vf, pseudo_vis_mask)
         loss_dict["loss_init_pred_vf_vis"] = vf_loss_vis * self_loss_cfg.VIS_VF_LW
 
     if self_loss_cfg.FULL_VF_LW > 0:
-        vf_loss_full = vf_loss_func(batch["full_vf"], pred_full_vf, pseudo_full_mask_in_im)
+        vf_loss_full = vf_loss_func(batch["pseudo_full_vf"], pred_full_vf, pseudo_full_mask)
         loss_dict["loss_init_pred_vf_full"] = vf_loss_full * self_loss_cfg.FULL_VF_LW
     # endregion
 
@@ -325,7 +323,7 @@ def compute_self_loss_pose(
     ren_xyz = rearrange(ren_ret["xyz"], "b h w c -> b c h w")
     # endregion
 
-    # region mask
+    # region make pseudo mask labels
     pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
     pseudo_vis_mask_in_im = (batch["pseudo_vis_mask_prob_in_im"] > 0.5).to(torch.float32)  # BHW
 
@@ -371,10 +369,10 @@ def compute_self_loss_pose(
         pseudo_full_mask_prob_vis = batch["pseudo_full_mask_prob"][vis_i].cpu().numpy()
         vis_data["pseudo/full_mask_prob_roi"] = pseudo_full_mask_prob_vis[0]
 
-        pseudo_vis_vf_vis = batch["vis_vf"][vis_i, 0, 0].detach().cpu().numpy()
+        pseudo_vis_vf_vis = batch["pseudo_vis_vf"][vis_i, 0, 0].detach().cpu().numpy()
         vis_data["pseudo/vis_vf_roi"] = pseudo_vis_vf_vis
 
-        pseudo_full_vf_vis = batch["full_vf"][vis_i, 0, 0].detach().cpu().numpy()
+        pseudo_full_vf_vis = batch["pseudo_full_vf"][vis_i, 0, 0].detach().cpu().numpy()
         vis_data["pseudo/full_vf_roi"] = pseudo_full_vf_vis
 
     # region mask loss (init ren) -----------------------
@@ -423,11 +421,11 @@ def compute_self_loss_pose(
 
     # region vf teacher<->pred loss -------------------------------
     if self_loss_cfg.VIS_VF_LW > 0:
-        vf_loss_vis = vf_loss_func(batch["vis_vf"], pred_vis_vf, pseudo_vis_mask_in_im)
+        vf_loss_vis = vf_loss_func(batch["pseudo_vis_vf"], pred_vis_vf, pseudo_vis_mask)
         loss_dict["loss_init_pred_vf_vis"] = vf_loss_vis * self_loss_cfg.VIS_VF_LW
 
     if self_loss_cfg.FULL_VF_LW > 0:
-        vf_loss_full = vf_loss_func(batch["full_vf"], pred_full_vf, pseudo_full_mask_in_im)
+        vf_loss_full = vf_loss_func(batch["pseudo_full_vf"], pred_full_vf, pseudo_full_mask)
         loss_dict["loss_init_pred_vf_full"] = vf_loss_full * self_loss_cfg.FULL_VF_LW
     # endregion
 
@@ -774,7 +772,8 @@ def batch_data_self_geo(cfg, data, model_teacher, device):
 
     batch = {
         "roi_img": torch.stack([d["roi_img"] for d in data], dim=0).to(device, non_blocking=True),
-        "roi_gt_img": torch.stack([d["roi_gt_img"] for d in data], dim=0).to(device, non_blocking=True)
+        "roi_gt_img": torch.stack([d["roi_gt_img"] for d in data], dim=0).to(device, non_blocking=True),
+        "gt_img": torch.stack([d["gt_img"] for d in data], dim=0).to(device, non_blocking=True)
     }
     # get pose related pseudo labels from teacher model --------------------------
     with torch.no_grad():
