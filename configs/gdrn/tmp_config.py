@@ -1,4 +1,4 @@
-_base_ = ["../_base_/gdrn_base.py"]
+_base_ = ["../_base_/gdrn_base.py", "../_base_/renderer_base.py"]
 
 OUTPUT_DIR = "output/gdrn/lm_pbr/my_config/ape"
 INPUT = dict(
@@ -46,11 +46,12 @@ INPUT = dict(
             LOWER_LIM=0.75,
         )
     ),
+    WITH_PRECOMPUTE_NORM=True
 )
 
 SOLVER = dict(
     IMS_PER_BATCH=2,  # 24
-    TOTAL_EPOCHS=100,
+    TOTAL_EPOCHS=160,
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
@@ -59,11 +60,18 @@ SOLVER = dict(
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=1000,
-    CLIP_GRAD=100,
+    CLIP_GRAD=50,
+    # checkpoint ------------------------------------------------
+    CHECKPOINT_PERIOD=2,
+    MAX_TO_KEEP=10,
 )
 
+RENDERER = dict(
+    DIFF_RENDERER="new_DIBR",
+)  # DIBR | dibr | new_DIBR
+
 DATASETS = dict(
-    TRAIN=("lm_real_ape_train",),  # TRAIN=("lm_pbr_ape_train",), lm_real_ape_train, lmo_test, lm_real_ape_test
+    TRAIN=("lmo_pbr_ape_train",),  # lm_pbr_ape_train, lm_real_ape_train, lmo_test, lm_real_ape_test
     TEST=("lmo_test",),  # lmo_test lm_real_ape_test
     DET_FILES_TEST=(
         "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
@@ -76,7 +84,8 @@ MODEL = dict(
     PIXEL_MEAN=[0.0, 0.0, 0.0],
     PIXEL_STD=[255.0, 255.0, 255.0],
     POSE_NET=dict(
-        NAME="GDRN_double_mask_double_vf",  # GDRN_double_mask_double_vf, GDRN_double_mask
+        USE_MTL=False,
+        NAME="GDRN_MaskNormVF",  # GDRN_double_mask_double_vf, GDRN_double_mask, GDRN_double_mask_double_vf
         XYZ_ONLINE=False,
         BACKBONE=dict(
             FREEZE=False,
@@ -93,23 +102,25 @@ MODEL = dict(
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(
-                type="TopDownDoubleMaskDoubleVFXyzRegionHead",  # TopDownDoubleMaskXyzRegionHead, TopDownDoubleMaskDoubleVFXyzRegionHead
+                type="TopDownMaskNormVFXyzRegionHead",  # TopDownDoubleMaskXyzRegionHead, TopDownDoubleMaskDoubleVFXyzRegionHead,
                 in_dim=2048,  # this is num out channels of backbone conv feature
             ),
             NUM_REGIONS=64,
             VF_CLASS_AWARE=False,
             NUM_CHANNAL_VF=16,
+            NORM_CLASS_AWARE=False,
         ),
         PNP_NET=dict(
             INIT_CFG=dict(
                 norm="GN",
                 act="gelu",
-                type="ConvPnPNetAll",
+                type="ConvPnPNetMaskNormVF",
             ),
             REGION_ATTENTION=True,
             WITH_2D_COORD=True,
-            MASK_ATTENTION="concat",
+            MASK_ATTENTION='concat',
             WITH_VF="both",
+            WITH_NORM="both",
             ROT_TYPE="allo_rot6d",
             TRANS_TYPE="centroid_z",
         ),
@@ -136,6 +147,13 @@ MODEL = dict(
             # vf-rt loss ---------------------------
             VF_RT_LOSS_TYPE="L1+Cos",
             VF_RT_LW=1.0,
+            # vertex norm loss ---------------------------
+            NORM_LOSS_TYPE="L1+Cos",
+            VIS_NORM_LW=1.0,
+            FULL_NORM_LW=1.0,
+            # vertex norm-rt loss ---------------------------
+            NORM_RT_LOSS_TYPE="L1+Cos",
+            NORM_RT_LW=1.0,
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM

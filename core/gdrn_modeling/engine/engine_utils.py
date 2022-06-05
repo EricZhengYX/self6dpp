@@ -51,6 +51,14 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
         )
 
         batch["roi_trans_ratio"] = torch.stack([d["trans_ratio"] for d in data], dim=0).to(device, non_blocking=True)
+
+    for key in ["height", "width"]:
+        if key in data[0]:
+            dtype = torch.long
+            batch[key] = torch.tensor([d[key] for d in data]).to(
+                device=device, dtype=dtype, non_blocking=True
+            )
+
     # yapf: disable
     for key in [
         "roi_xyz", "roi_xyz_bin",

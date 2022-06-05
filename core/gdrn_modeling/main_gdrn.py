@@ -7,6 +7,7 @@ import os.path as osp
 import sys
 from setproctitle import setproctitle
 import numpy as np
+
 np.set_string_function(lambda x: "{s} @ {dt}".format(s=x.shape, dt=x.dtype))
 
 import torch
@@ -34,6 +35,8 @@ from lib.utils.setup_logger import setup_my_logger
 from lib.utils.time_utils import get_time_str
 import ref
 
+from core.self6dpp.engine.self_engine_utils import get_DIBR_models_renderer, get_dibr_models_renderer, my_get_DIBR_models_renderer
+
 from core.gdrn_modeling.datasets.dataset_factory import register_datasets_in_cfg
 from core.gdrn_modeling.engine.engine_utils import get_renderer
 from core.gdrn_modeling.engine.engine import do_test, do_train, do_save_results
@@ -42,6 +45,7 @@ from core.gdrn_modeling.models import (
     GDRN_double_mask,
     GDRN_Dstream_double_mask,
     GDRN_double_mask_double_vf,
+    GDRN_MaskNormVF,
 )  # noqa
 
 
@@ -63,7 +67,11 @@ def setup(args):
         iprint(f"OUTPUT_DIR was automatically set to: {cfg.OUTPUT_DIR}")
 
     if cfg.get("EXP_NAME", "") == "":
-        setproctitle("{}.{}".format(osp.splitext(osp.basename(args.config_file))[0], get_time_str()))
+        setproctitle(
+            "{}.{}".format(
+                osp.splitext(osp.basename(args.config_file))[0], get_time_str()
+            )
+        )
     else:
         setproctitle("{}.{}".format(cfg.EXP_NAME, get_time_str()))
 
@@ -76,7 +84,9 @@ def setup(args):
     # ---------------------------------------------------------
     cfg.SOLVER.pop("STEPS", None)
     cfg.SOLVER.pop("MAX_ITER", None)
-    bs_ref = cfg.SOLVER.get("REFERENCE_BS", cfg.SOLVER.IMS_PER_BATCH)  # nominal batch size
+    bs_ref = cfg.SOLVER.get(
+        "REFERENCE_BS", cfg.SOLVER.IMS_PER_BATCH
+    )  # nominal batch size
     if bs_ref <= cfg.SOLVER.IMS_PER_BATCH:
         bs_ref = cfg.SOLVER.REFERENCE_BS = cfg.SOLVER.IMS_PER_BATCH
         # default DDP implementation is slow for accumulation according to: https://pytorch.org/docs/stable/notes/ddp.html
@@ -85,7 +95,9 @@ def setup(args):
         # which means, the result is still right but the training speed gets slower.
         # TODO: If acceleration is needed, there is an implementation of allreduce_post_accumulation
         # in https://github.com/NVIDIA/DeepLearningExamples/blob/master/PyTorch/LanguageModeling/BERT/run_pretraining.py
-        accumulate_iter = max(round(bs_ref / cfg.SOLVER.IMS_PER_BATCH), 1)  # accumulate loss before optimizing
+        accumulate_iter = max(
+            round(bs_ref / cfg.SOLVER.IMS_PER_BATCH), 1
+        )  # accumulate loss before optimizing
     else:
         accumulate_iter = 1
     # NOTE: get optimizer from string cfg dict
@@ -133,7 +145,9 @@ def setup(args):
     # cfg.freeze()
     my_default_setup(cfg, args)
     # Setup logger
-    setup_my_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="core")
+    setup_my_logger(
+        output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="core"
+    )
     setup_my_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="lib")
     setup_for_distributed(is_master=comm.is_main_process())
     return cfg
@@ -145,8 +159,32 @@ def main(args):
 
     distributed = comm.get_world_size() > 1
 
+    # get renderer (DIBR) ----------------------
+    if args.eval_only or cfg.TEST.SAVE_RESULTS_ONLY:
+        ren_models = None
+        ren = None
+    else:
+        train_dset_meta = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
+        data_ref = ref.__dict__[train_dset_meta.ref_key]
+        train_obj_names = train_dset_meta.objs
+        render_gpu_id = comm.get_local_rank()
+        # ren = get_egl_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+        if cfg.RENDERER.DIFF_RENDERER == "DIBR":
+            ren_models, ren = get_DIBR_models_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+        elif cfg.RENDERER.DIFF_RENDERER == "new_DIBR":
+            ren_models, ren = my_get_DIBR_models_renderer(cfg, data_ref, obj_names=train_obj_names)
+        elif cfg.RENDERER.DIFF_RENDERER == "dibr":
+            ren_models, ren = get_dibr_models_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+        else:
+            raise ValueError("Unknown differentiable renderer type")
+
+    '''
     # get renderer ----------------------
-    if args.eval_only or cfg.TEST.SAVE_RESULTS_ONLY or (not cfg.MODEL.POSE_NET.XYZ_ONLINE):
+    if (
+        args.eval_only
+        or cfg.TEST.SAVE_RESULTS_ONLY
+        or (not cfg.MODEL.POSE_NET.XYZ_ONLINE)
+    ):
         renderer = None
     else:
         train_dset_meta = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
@@ -154,12 +192,25 @@ def main(args):
         train_obj_names = train_dset_meta.objs
         if cfg.MODEL.POSE_NET.XYZ_ONLINE:
             render_gpu_id = comm.get_local_rank()
-            renderer = get_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+            renderer = get_renderer(
+                cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id
+            )
         else:
             renderer = None
+    '''
 
     logger.info(f"Used GDRN module name: {cfg.MODEL.POSE_NET.NAME}")
-    model, optimizer = eval(cfg.MODEL.POSE_NET.NAME).build_model_optimizer(cfg, is_test=args.eval_only)
+    model_args = {
+        "is_test": args.eval_only
+    }
+    if "Norm" in cfg.MODEL.POSE_NET.NAME:
+        model_args.update({
+            "renderer": ren,
+            "render_models": ren_models,
+        })
+    model, optimizer = eval(cfg.MODEL.POSE_NET.NAME).build_model_optimizer(
+        cfg, **model_args,
+    )
     logger.info("Model:\n{}".format(model))
 
     if True:
@@ -168,11 +219,15 @@ def main(args):
         logger.info("{}M params".format(params))
 
     if cfg.TEST.SAVE_RESULTS_ONLY:  # save results only ------------------------------
-        MyCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
+        MyCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+            cfg.MODEL.WEIGHTS, resume=args.resume
+        )
         return do_save_results(cfg, model)
 
     if args.eval_only:  # eval only --------------------------------------------------
-        MyCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
+        MyCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+            cfg.MODEL.WEIGHTS, resume=args.resume
+        )
         return do_test(cfg, model)
 
     if distributed and args.launcher not in ["hvd"]:
@@ -183,7 +238,7 @@ def main(args):
             find_unused_parameters=True,
         )
 
-    do_train(cfg, args, model, optimizer, renderer=renderer, resume=args.resume)
+    do_train(cfg, args, model, optimizer, renderer=None, resume=args.resume)
     return do_test(cfg, model)
 
 

@@ -153,6 +153,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         # fmt: off
         self.img_format = cfg.INPUT.FORMAT  # default BGR
         self.with_depth = cfg.INPUT.WITH_DEPTH
+        self.with_norm = cfg.INPUT.WITH_PRECOMPUTE_NORM
         self.bp_depth = cfg.INPUT.BP_DEPTH
         self.aug_depth = cfg.INPUT.AUG_DEPTH
         self.drop_depth_ratio = cfg.INPUT.DROP_DEPTH_RATIO
@@ -382,6 +383,21 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 depth_ch = 1
             depth = depth.astype("float32")
 
+        if self.with_norm:
+            assert "norm_file" in dataset_dict, "norm file is not in dataset_dict"
+            norm_path = dataset_dict["norm_file"]
+
+            _suffix = osp.splitext(norm_path)[-1]
+            if _suffix == ".npy":
+                _raw_norm = np.load(norm_path)
+            elif _suffix in [".png", ".jpg", ".jpeg"]:
+                _raw_norm = mmcv.imread(norm_path, "unchanged")
+            else:
+                raise NotImplementedError("Unsupported suffix: {}".format(_suffix))
+            assert _raw_norm.shape == (im_H_ori, im_W_ori, 3), _raw_norm.shape
+            norm_mask = _raw_norm != 0
+            norm = _raw_norm / (np.linalg.norm(_raw_norm, axis=-1, keepdims=True) + 1e-5) * norm_mask
+
         # currently only replace bg for train ###############################
         # some synthetic data already has bg, img_type should be real or something else but not syn
         img_type = dataset_dict.get("img_type", "real")
@@ -527,6 +543,12 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         ).transpose(2, 0, 1)
 
         roi_img = self.normalize_image(cfg, roi_img)
+
+        # roi_norm ---------------------------------------
+        if self.with_norm:
+            roi_norm = crop_resize_by_warp_affine(
+                norm, bbox_center, scale, input_res, interpolation=cv2.INTER_LINEAR
+            ).transpose(2, 0, 1)
 
         # roi_depth --------------------------------------
         if self.with_depth:
@@ -721,6 +743,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             """
             making 'pose-variated data augmentations', for following nparrays:
             'roi_img'
+            'roi_norm'
             'roi_region'
             'roi_xyz'
             'roi_vf_full'
@@ -751,6 +774,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
 
             dataset_dict["roi_img"] = _make_aug(roi_img)
             dataset_dict["roi_xyz"] = _make_aug(roi_xyz)
+            if self.with_norm:
+                dataset_dict["roi_norm"] = _make_aug(roi_norm)
             if self.with_depth:
                 dataset_dict["roi_depth"] = _make_aug(roi_depth)
             if g_head_cfg.NUM_REGIONS > 1:
@@ -782,6 +807,10 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             dataset_dict["roi_img"] = torch.as_tensor(
                 roi_img.astype("float32")
             ).contiguous()
+            if self.with_norm:
+                dataset_dict["roi_norm"] = torch.as_tensor(
+                    roi_norm.astype("float32")
+                ).contiguous()
             if self.with_depth:
                 dataset_dict["roi_depth"] = torch.as_tensor(
                     roi_depth.astype("float32")

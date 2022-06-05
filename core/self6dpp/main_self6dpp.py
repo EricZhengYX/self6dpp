@@ -164,7 +164,7 @@ def main(args):
         if cfg.RENDERER.DIFF_RENDERER == "DIBR":
             ren_models, ren = get_DIBR_models_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
         elif cfg.RENDERER.DIFF_RENDERER == "new_DIBR":
-            ren_models, ren = my_get_DIBR_models_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
+            ren_models, ren = my_get_DIBR_models_renderer(cfg, data_ref, obj_names=train_obj_names)
         elif cfg.RENDERER.DIFF_RENDERER == "dibr":
             ren_models, ren = get_dibr_models_renderer(cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id)
         else:

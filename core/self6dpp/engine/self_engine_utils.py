@@ -1,3 +1,5 @@
+import re
+import os
 import os.path as osp
 import io
 from functools import partial
@@ -8,6 +10,7 @@ import torch.nn.functional as F
 import numpy as np
 import itertools
 import matplotlib.pyplot as plt
+import mmcv
 from einops import rearrange
 from PIL import Image
 from detectron2.layers import paste_masks_in_image
@@ -17,6 +20,7 @@ from core.utils.camera_geometry import get_K_crop_resize
 from core.utils.data_utils import xyz_to_region_batch, denormalize_image
 from core.utils.utils import get_emb_show
 from core.utils.edge_utils import compute_mask_edge_weights
+from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT
 from core.self6dpp.losses.mask_losses import weighted_ex_loss_probs, soft_dice_loss
 from core.self6dpp.losses.depth_bp_chamfer_loss import depth_bp_chamfer_loss
 from core.self6dpp.losses.pm_loss import PyPMLoss
@@ -24,6 +28,7 @@ from core.utils.zoom_utils import batch_crop_resize
 
 from lib.torch_utils.color.lab import rgb_to_lab, normalize_lab
 from lib.vis_utils.image import heatmap, grid_show
+from lib.pysixd.inout import load_ply
 
 
 def fig2img(fig):
@@ -911,27 +916,43 @@ def batch_data_test_self(cfg, data, device="cuda"):
     return batch
 
 
-def my_get_DIBR_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=None):
+def my_get_DIBR_models_renderer(cfg, data_ref, obj_names, preloaded="models_all_w_name.pkl"):
     from lib.dr_utils.dib_renderer_x.renderer_dibr import load_ply_models, Renderer_dibr
     model_dir = data_ref.model_dir
-    obj_ids = [data_ref.obj2id[_obj] for _obj in obj_names]
-    model_paths = [osp.join(model_dir, "obj_{:06d}.ply".format(obj_id)) for obj_id in obj_ids]
 
-    texture_paths = None
-    if data_ref.texture_paths is not None:
-        texture_paths = [osp.join(model_dir, "obj_{:06d}.png".format(obj_id)) for obj_id in obj_ids]
-    models = load_ply_models(
-        obj_paths=model_paths,  # model_paths=model_paths,
-        texture_paths=texture_paths,
-        vertex_scale=data_ref.vertex_scale,
-        tex_resize=True,  # to reduce gpu memory usage
-        width=512,
-        height=512,
-    )
+    full_pth = osp.abspath(osp.join(model_dir, preloaded))
+    if osp.exists(full_pth):
+        models = mmcv.load(full_pth)
+    else:
+        ply_list = sorted(
+            [
+                osp.abspath(osp.join(model_dir, file))
+                for file in os.listdir(model_dir)
+                if osp.splitext(file)[-1] == ".ply"
+            ]
+        )
+        models = {}
+        for ply_pth in ply_list:
+            obj_id = int(re.search("\d+", osp.basename(ply_pth)).group())
+            obj_name = LM_DICT[obj_id]
+            models[obj_name] = load_ply(ply_pth, vertex_scale=0.001)
+        mmcv.dump(models, full_pth)
+
+    std_dtype = torch.float32
+    models_selected = {}
+    for name in obj_names:
+        model = models[name]
+        models_selected[name] = {
+            "vertices": torch.tensor(model["pts"], device='cuda', dtype=std_dtype),
+            "colors": torch.tensor(model["colors"], device='cuda', dtype=std_dtype),
+            "normals": torch.tensor(model["normals"], device='cuda', dtype=std_dtype),
+            "faces": torch.tensor(model["faces"], device='cuda', dtype=std_dtype),
+        }
+
     ren_dibr = Renderer_dibr(
         height=cfg.RENDERER.DIBR.HEIGHT, width=cfg.RENDERER.DIBR.WIDTH, mode=cfg.RENDERER.DIBR.MODE
     )
-    return models, ren_dibr
+    return models_selected, ren_dibr
 
 
 def get_DIBR_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=None):

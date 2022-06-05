@@ -267,21 +267,22 @@ class Renderer_dibr(object):
         ret = {}
         self.dib_ren.set_camera_parameters_from_RT_K(Rs, ts, Ks, height, width, near=znear, far=zfar, rot_type=rot_type)
 
-        colors = [model["colors"][None] for model in models]  # b x [1, p, 3]
+        # points: list of [vertices, faces]
         points = [[model["vertices"][None], model["faces"].long()] for model in models]
 
-        # points: list of [vertices, faces]
-        # colors: list of colors
-        color, im_prob, _, im_mask = self.dib_ren.forward(points=points, colors=colors)
-        ret["color"] = color
-        ret["prob"] = im_prob.squeeze(-1)
-        ret["mask"] = im_mask.squeeze(-1)
+        if "color" in mode:
+            # colors: list of colors
+            colors = [model["colors"][None] for model in models]  # b x [1, p, 3]
+            color, im_prob, _, im_mask = self.dib_ren.forward(points=points, colors=colors)
+            ret["color"] = color
+            ret["prob"] = im_prob.squeeze(-1)
+            ret["mask"] = im_mask.squeeze(-1)
 
         if "norm" in mode:
             norms = [model["normals"][None] for model in models]
-            _ren_norms, _, _, _ = self.dib_ren.forward(points=points, colors=norms)
+            _ren_norms, _, _, norm_im_mask = self.dib_ren.forward(points=points, colors=norms)
             ren_norms_shift = _ren_norms - _ren_norms.min()
-            ren_norms = ren_norms_shift / (torch.norm(ren_norms_shift, dim=-1, keepdim=True) + 1e-5) * im_mask
+            ren_norms = ren_norms_shift / (torch.norm(ren_norms_shift, dim=-1, keepdim=True) + 1e-5) * norm_im_mask
             ret["norm"] = ren_norms
 
         if "depth" in mode:
