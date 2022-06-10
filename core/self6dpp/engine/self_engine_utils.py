@@ -17,10 +17,10 @@ from detectron2.layers import paste_masks_in_image
 from fvcore.nn import smooth_l1_loss
 
 from core.utils.camera_geometry import get_K_crop_resize
-from core.utils.data_utils import xyz_to_region_batch, denormalize_image
+from core.utils.data_utils import xyz_to_region_batch, denormalize_image, compute_vf_torch
 from core.utils.utils import get_emb_show
 from core.utils.edge_utils import compute_mask_edge_weights
-from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT
+from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT, LM_13_OBJECTS
 from core.self6dpp.losses.mask_losses import weighted_ex_loss_probs, soft_dice_loss
 from core.self6dpp.losses.depth_bp_chamfer_loss import depth_bp_chamfer_loss
 from core.self6dpp.losses.pm_loss import PyPMLoss
@@ -290,7 +290,7 @@ def compute_self_loss_pose(
         batch["K_renderer"][:, 1, 2] += cfg.RENDERER.DIBR.V_OFFSET  # HACK: DIBR renderer has some v offset bug!!
 
     # get rendered mask/rgb/depth/xyz using DIBR
-    cur_models = [ren_models[int(_l)] for _l in batch["roi_cls"]]
+    cur_models = [ren_models[LM_13_OBJECTS[int(_l)]] for _l in batch["roi_cls"]]  # TODO: LMO
 
     if cfg.RENDERER.DIFF_RENDERER == "DIBR":
         ren_func = {
@@ -434,6 +434,33 @@ def compute_self_loss_pose(
         loss_dict["loss_init_pred_vf_full"] = vf_loss_full * self_loss_cfg.FULL_VF_LW
     # endregion
 
+    # region vf pseudo RT<->pred conv --------------------
+    if self_loss_cfg.VIS_RT_VF_LW > 0:
+        vf_from_teacher_rt_vis = compute_vf_torch(
+            pseudo_vis_mask.unsqueeze(1),  # b*1*1*w*h
+            batch['vf_fps_points'],  # b*f*3
+            batch["K_renderer"],  # b*3*3
+            batch["pseudo_rot"],  # b*3*3
+            batch["pseudo_trans"],  # b*3
+            batch["roi_center"],  # b*2
+            batch["roi_scale"].unsqueeze(1),  # b*1
+        )
+        vf_loss_pseudo_rt_vis = vf_loss_func(vf_from_teacher_rt_vis, pred_vis_vf, pseudo_vis_mask)
+        loss_dict["loss_pseudo_rt_vf_vis"] = vf_loss_pseudo_rt_vis * self_loss_cfg.VIS_RT_VF_LW
+    if self_loss_cfg.FULL_RT_VF_LW > 0:
+        vf_from_teacher_rt_full = compute_vf_torch(
+            pseudo_full_mask.unsqueeze(1),  # b*1*1*w*h
+            batch['vf_fps_points'],  # b*f*3
+            batch["K_renderer"],  # b*3*3
+            batch["pseudo_rot"],  # b*3*3
+            batch["pseudo_trans"],  # b*3
+            batch["roi_center"],  # b*2
+            batch["roi_scale"].unsqueeze(1),  # b*1
+        )
+        vf_loss_pseudo_rt_full = vf_loss_func(vf_from_teacher_rt_full, pred_full_vf, pseudo_full_mask)
+        loss_dict["loss_pseudo_rt_vf_full"] = vf_loss_pseudo_rt_full * self_loss_cfg.FULL_RT_VF_LW
+    # endregion
+
     if tb_writer is not None:
         pred_vis_vf_vis = pred_vis_vf[vis_i, 0, 0].detach().cpu().numpy()
         vis_data["pred/vis_vf_roi"] = pred_vis_vf_vis
@@ -452,13 +479,13 @@ def compute_self_loss_pose(
         # ren_mask_roi = batch_crop_resize(ren_mask, batch["inst_rois"], out_H=256, out_W=256)
         gt_img_roi = batch["roi_gt_img"]
         # NOTE: use only visib parts to compute color loss
-        pseudo_mask_roi = F.interpolate(pseudo_vis_mask, size=(in_res, in_res), mode="nearest")
+        pseudo_vis_mask_roi = F.interpolate(pseudo_vis_mask, size=(in_res, in_res), mode="nearest")
         if tb_writer is not None:
             roi_gt_img_vis = batch["roi_gt_img"][vis_i].cpu().numpy()
             roi_gt_img_vis = denormalize_image(roi_gt_img_vis, cfg)[::-1].astype("uint8")
             vis_data["gt/roi_image"] = rearrange(roi_gt_img_vis, "c h w -> h w c")
 
-            gt_img_roi_masked_vis = (gt_img_roi[vis_i] * pseudo_mask_roi[vis_i]).cpu().numpy()
+            gt_img_roi_masked_vis = (gt_img_roi[vis_i] * pseudo_vis_mask_roi[vis_i]).cpu().numpy()
             gt_img_roi_masked_vis = denormalize_image(gt_img_roi_masked_vis, cfg)[::-1].astype("uint8")
             vis_data["gt/img_roi_masked"] = rearrange(gt_img_roi_masked_vis, "c h w -> h w c")
 
@@ -474,7 +501,7 @@ def compute_self_loss_pose(
     # region perceptual loss --------------------------------------
     if self_loss_cfg.PERCEPT_LW > 0:
         assert perceptual_func is not None
-        loss_percep_obj = perceptual_func(ren_img_roi, gt_img_roi * pseudo_mask_roi)
+        loss_percep_obj = perceptual_func(ren_img_roi, gt_img_roi * pseudo_vis_mask_roi)
         loss_dict["loss_percep_obj"] = loss_percep_obj * self_loss_cfg.PERCEPT_LW
     # endregion
 
@@ -487,13 +514,13 @@ def compute_self_loss_pose(
         lab_ren_img_roi = normalize_lab(lab_ren_img_roi)  # [0, 1], NCHW
         if self_loss_cfg.LAB_NO_L:
             loss_color_l1_obj = smooth_l1_loss(
-                lab_gt_img_roi[:, 1:, :, :] * pseudo_mask_roi, lab_ren_img_roi[:, 1:, :, :], beta=0, reduction="sum"
-            ) / max(1, pseudo_mask_roi.sum())
+                lab_gt_img_roi[:, 1:, :, :] * pseudo_vis_mask_roi, lab_ren_img_roi[:, 1:, :, :], beta=0, reduction="sum"
+            ) / max(1, pseudo_vis_mask_roi.sum())
             loss_tag = "loss_color_ab_obj"
         else:
             loss_color_l1_obj = smooth_l1_loss(
-                lab_gt_img_roi * pseudo_mask_roi, lab_ren_img_roi, beta=0, reduction="sum"
-            ) / max(1, pseudo_mask_roi.sum())
+                lab_gt_img_roi * pseudo_vis_mask_roi, lab_ren_img_roi, beta=0, reduction="sum"
+            ) / max(1, pseudo_vis_mask_roi.sum())
             loss_tag = "loss_color_lab_obj"
         loss_dict[loss_tag] = self_loss_cfg.LAB_LW * loss_color_l1_obj
     # endregion
@@ -501,7 +528,7 @@ def compute_self_loss_pose(
     # region ms ssim loss ---------------------------------------------
     if self_loss_cfg.MS_SSIM_LW > 0:
         assert ms_ssim_func is not None
-        loss_ms_ssim_obj = (1 - ms_ssim_func(gt_img_roi * pseudo_mask_roi, ren_img_roi)).mean()
+        loss_ms_ssim_obj = (1 - ms_ssim_func(gt_img_roi * pseudo_vis_mask_roi, ren_img_roi)).mean()
         loss_dict["loss_ms_ssim"] = loss_ms_ssim_obj * self_loss_cfg.MS_SSIM_LW
     # endregion
 
@@ -513,7 +540,7 @@ def compute_self_loss_pose(
         # gt_depth_roi = batch_crop_resize(
         #     rearrange(batch["depth"], "b h w -> b 1 h w"), batch["inst_rois"], out_H=in_res, out_W=in_res
         # )
-        # gt_depth_roi_masked = (gt_depth_roi * pseudo_mask_roi)[:, 0]
+        # gt_depth_roi_masked = (gt_depth_roi * pseudo_vis_mask_roi)[:, 0]
         gt_depth_masked = batch["depth"] * pseudo_vis_mask_in_im
         if self_loss_cfg.GEOM_LOSS_TYPE == "chamfer":
             # NOTE: real depths should be masked by pseudo mask
@@ -702,6 +729,11 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
         )
     if "roi_fps_points" in data[0]:
         batch["roi_fps_points"] = torch.stack([d["roi_fps_points"] for d in data], dim=0).to(
+            device=device, dtype=torch.float32, non_blocking=True
+        )
+
+    if "vf_fps_points" in data[0]:
+        batch["vf_fps_points"] = torch.stack([d["vf_fps_points"] for d in data], dim=0).to(
             device=device, dtype=torch.float32, non_blocking=True
         )
     # get pose related pseudo labels from teacher model --------------------------

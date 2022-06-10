@@ -68,7 +68,7 @@ DATASETS = dict(
     TRAIN=("lm_real_ape_train",),  # real data
     TRAIN2=(),  # synthetic data    "lm_pbr_ape_train",
     TRAIN2_RATIO=0.0,
-    TEST=("lm_real_ape_test", "lmo_ape_test"),  # lmo_test lm_real_ape_test
+    TEST=("lm_real_ape_test", "lmo_test"),  # lmo_test lm_real_ape_test
     # for self-supervised training
     DET_FILES_TRAIN=(
         "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lm_13_train.json",
@@ -235,7 +235,6 @@ MODEL = dict(
 
 TRAIN = dict(
     DEBUG_SINGLE_IM=False,
-    RECORD_TRAIN_SAMPLE_ID=True,
 )
 
 TEST = dict(

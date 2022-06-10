@@ -131,7 +131,7 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
                 process instead of making a copy.
         """
         self.augmentation = build_gdrn_augmentation(cfg, is_train=(split == "train"))
-        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg)
+        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg, is_train=(split == "train"))
 
         # fmt: off
         self.img_format = cfg.INPUT.FORMAT  # default BGR
@@ -164,7 +164,11 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         self._serialize = serialize
 
         # output mode: pose | geo
-        self.__geo_mode_prob = cfg.INPUT.POSE_VARIATED_AUG.get("OVERALL_PROB", 0)
+        try:
+            geo_prob = cfg.INPUT.POSE_VARIATED_AUG.OVERALL_PROB
+        except AttributeError:
+            geo_prob = 0
+        self.__geo_mode_prob = geo_prob
         self.__output_mode = "pose"
 
         def _serialize(data):
@@ -454,6 +458,13 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         roi_coord_2d = crop_resize_by_warp_affine(
             coord_2d, bbox_center, scale, out_res, interpolation=cv2.INTER_LINEAR
         ).transpose(2, 0, 1)
+
+        # fps points: for vf
+        if g_head_cfg.NUM_CHANNAL_VF > 1:
+            vf_fps = self._get_fps_points(dataset_name, g_head_cfg.NUM_CHANNAL_VF)[roi_cls]
+            dataset_dict["vf_fps_points"] = torch.as_tensor(
+                vf_fps.astype(np.float32)
+            ).contiguous()
 
         # fps points: for region label
         if g_head_cfg.NUM_REGIONS > 1:

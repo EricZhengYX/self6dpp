@@ -55,7 +55,7 @@ SOLVER = dict(
 
 DATASETS = dict(
     TRAIN=("lm_pbr_ape_train",),
-    TEST=("lm_real_ape_test",),  # lmo_bop_test lm_real_ape_test lmo_NoBopTest_ape_train
+    TEST=("lmo_ape_bop_test",),  # lmo_bop_test lm_real_ape_test lmo_NoBopTest_ape_train lm_real_ape_test lmo_test
     # DET_FILES_TEST=("datasets/BOP_DATASETS/lm/test/test_bboxes/bbox_faster_all.json",),
     # INIT_POSE_FILES_TEST=(
     #     "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
@@ -64,7 +64,9 @@ DATASETS = dict(
     #     "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so.json",
     # ),
     INIT_POSE_FILES_TEST=(
-        "/home/eric/py_ws/MY_SO_Pose/pose_est_0139119.json",
+        "/home/eric/tb_remote/pose_est_lmo_e5.json",
+        # "/home/eric/py_ws/self6dpp/pose_est_lmo_0026084.json",
+        # "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
     ),
 )
 
@@ -143,6 +145,10 @@ MODEL = dict(
             FLOW_LW=0.1,
         ),
     ),
+)
+
+TEST = dict(
+    SAVE_RESULTS_ONLY=False,
 )
 
 

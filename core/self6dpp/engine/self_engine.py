@@ -373,6 +373,12 @@ def do_train(
 
         debug_results = {}
 
+    # record which samples are used in each iteration
+    record_samples = cfg.TRAIN.get("RECORD_TRAIN_SAMPLE_ID", False)
+    if record_samples:
+        logger.info("Samples used during the training will be recorded.")
+        sample_ids_dict = {}
+
     # compared to "train_net.py", we do not support accurate timing and
     # precise BN here, because they are not trivial to implement
     logger.info("Starting training from iteration {}".format(start_iter))
@@ -408,6 +414,9 @@ def do_train(
                 data = next(data_loader_iter)
                 do_self = True
                 this_iter_data_mode = data_loader.dataset.get_current_output_mode()
+
+            if record_samples:
+                sample_ids_dict[iteration] = [d['scene_im_id'] for d in data]
 
             storage.put_scalar("forward_mode", 0 if this_iter_data_mode == "pose" else 1, smoothing_hint=False)
 
@@ -505,8 +514,18 @@ def do_train(
                     tb_writer=tbx_writer if is_log_iter else None,
                     iteration=iteration if is_log_iter else None,
                 )
+                finite_loss_dict = {
+                    k: v for k, v in loss_dict.items() if torch.isfinite(v)
+                }
+                assert len(finite_loss_dict) > 0, finite_loss_dict
+                if len(finite_loss_dict) < len(loss_dict):
+                    failed_names = [k for k, v in loss_dict.items() if not torch.isfinite(v)]
+                    warn_msg = "following item(s) encountered NaN in iter{it}:\n{items}".format(
+                        it=iteration,
+                        items="\n".join(failed_names)
+                    )
+                    logger.warning(warn_msg)
                 losses = sum(loss_dict.values())
-                assert torch.isfinite(losses).all(), loss_dict
 
                 loss_dict_reduced = {
                     k: v.item() for k, v in comm.reduce_dict(loss_dict).items()
@@ -672,6 +691,8 @@ def do_train(
                     cfg.OUTPUT_DIR, "debug_results_{}.pkl".format(train_dset_names[0])
                 ),
             )
+    if record_samples:
+        mmcv.dump(sample_ids_dict, "sample_ids_dict.json")
 
 
 def vis_train_data(data, obj_names, cfg):

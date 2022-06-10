@@ -15,6 +15,7 @@ inference_test_output
 
 *.ttf
 *.jpg
+*.jpeg
 *.png
 *subsitute.sh
 exclude-file.txt
@@ -31,7 +32,9 @@ dist/
 # pytorch/python/numpy formats
 *.pth
 *.pkl
+*.pt
 *.npy
+*.npz
 *.engine
 *.onnx
 events.out.tfevents*

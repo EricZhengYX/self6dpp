@@ -33,12 +33,15 @@ class RandomZoom(T.Augmentation):
             ])
 
 
-def build_gdrn_augmentation_pose_variated(cfg) -> iaa.Sequential:
+def build_gdrn_augmentation_pose_variated(cfg, is_train: bool) -> iaa.Augmenter:
     """Create a list of :class:`Augmentation` from config.
 
     Returns:
         list[Augmentation]
     """
+    if not is_train:
+        return iaa.Noop()
+
     aug_cfg = cfg.INPUT.POSE_VARIATED_AUG
     rot_deg = aug_cfg.ROT.MAX_DEGREE // 2
     sl, su = aug_cfg.ZOOM.LOWER_LIM, aug_cfg.ZOOM.UPPER_LIM

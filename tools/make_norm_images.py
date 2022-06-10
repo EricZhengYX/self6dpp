@@ -103,7 +103,7 @@ if __name__ == "__main__":
             norm_fig = renderings["norm"][0].cpu().numpy()
             if AS_IMAGE:
                 Image.fromarray((norm_fig * 255).astype(np.uint8)).save(
-                    norm_fig
+                    norm_pth
                 )  # approx 11.4k
             else:
                 # saving as image(0-255) may bring round-off error

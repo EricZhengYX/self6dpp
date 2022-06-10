@@ -326,7 +326,7 @@ def compute_vf_torch(mask, fps_points, K, R, T, roi_center, roi_scale):  # 'vf' 
     @param R: B*3*3
     @param T: B*3
     @param roi_center: B*2
-    @param roi_scale: 1*B
+    @param roi_scale: B*1
     @return: f*2*w*h
     '''
     device = mask.device

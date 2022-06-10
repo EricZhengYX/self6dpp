@@ -144,7 +144,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 process instead of making a copy.
         """
         self.augmentation = build_gdrn_augmentation(cfg, is_train=(split == "train"))
-        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg)
+        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg, is_train=(split == "train"))
         if cfg.INPUT.COLOR_AUG_PROB > 0 and cfg.INPUT.COLOR_AUG_TYPE.lower() == "ssd":
             self.augmentation.append(ColorAugSSDTransform(img_format=cfg.INPUT.FORMAT))
             logging.getLogger(__name__).info(
@@ -153,7 +153,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         # fmt: off
         self.img_format = cfg.INPUT.FORMAT  # default BGR
         self.with_depth = cfg.INPUT.WITH_DEPTH
-        self.with_norm = cfg.INPUT.WITH_PRECOMPUTE_NORM
+        self.with_norm = cfg.INPUT.get("WITH_PRECOMPUTE_NORM", False)
         self.bp_depth = cfg.INPUT.BP_DEPTH
         self.aug_depth = cfg.INPUT.AUG_DEPTH
         self.drop_depth_ratio = cfg.INPUT.DROP_DEPTH_RATIO
@@ -191,7 +191,11 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         self._serialize = serialize
 
         # output mode: pose | geo
-        self.__geo_mode_prob = cfg.INPUT.POSE_VARIATED_AUG.get("OVERALL_PROB", 0)
+        try:
+            geo_prob = cfg.INPUT.POSE_VARIATED_AUG.OVERALL_PROB
+        except AttributeError:
+            geo_prob = 0
+        self.__geo_mode_prob = geo_prob
         self.__output_mode = "pose"
 
         def _serialize(data):
