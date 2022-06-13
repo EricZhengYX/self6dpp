@@ -3,9 +3,9 @@ import re
 import numpy as np
 from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT
 
-file_name = "/home/eric/tb_remote/self-my-config_lmo_ape_bop_test_preds.pkl"
+file_name = "/home/eric/tb_remote/self-my-config-test_lmo_NoBopTest_ape_train_preds.pkl"
 record = mmcv.load(file_name)
-save_name_suffix = "lmo_e5"
+save_name_suffix = "lmo_NoBopTest_ape_train_e43474"
 
 result = {}
 for obj_name, single_obj_dict in record.items():
@@ -26,4 +26,4 @@ for obj_name, single_obj_dict in record.items():
             result[key] = [est_dict]
         else:
             result[key].append(est_dict)
-mmcv.dump(result, "pose_est_{}.json".format(save_name_suffix))
+mmcv.dump(result, "/home/eric/tb_remote/pose_est_{}.json".format(save_name_suffix))

@@ -64,6 +64,7 @@ SOLVER = dict(
     CILP_GRAD=20,
 )
 
+'''
 DATASETS = dict(
     TRAIN=("lm_real_ape_train",),  # real data
     TRAIN2=(),  # synthetic data    "lm_pbr_ape_train",
@@ -84,7 +85,7 @@ DATASETS = dict(
     TRAIN=("lmo_NoBopTest_ape_train",),  # real data
     TRAIN2=("lmo_pbr_ape_train",),  # synthetic data
     TRAIN2_RATIO=0.0,
-    TEST=("lmo_bop_test",),
+    TEST=("lmo_ape_bop_test",),
     # for self-supervised training
     DET_FILES_TRAIN=(
         "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
@@ -94,7 +95,6 @@ DATASETS = dict(
         "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
     ),
 )
-'''
 
 RENDERER = dict(
     ENABLE=False,

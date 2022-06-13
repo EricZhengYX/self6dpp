@@ -1,8 +1,8 @@
 import mmcv
 import numpy as np
 
-save_name = "pose_refine_extra0026084_lmo_NoBopTest_ape_train.json"
-file_pth = "output/deepim/lmPbrSO/FlowNet512_1.5AugCosyAAEGray_Aggressive_Flat_lmPbr_SO/ape/inference_model_final/lmo_NoBopTest_ape_train/results.pkl"
+save_name = "pose_refine_extra0043474_lmo_NoBopTest_ape_train.json"
+file_pth = "output/deepim/lmPbrSO/FlowNet512_1.5AugCosyAAEGray_Aggressive_Flat_lmPbr_SO/ape/inference_deepim_pbr/lmo_NoBopTest_ape_train/results.pkl"
 result = mmcv.load(file_pth)
 
 

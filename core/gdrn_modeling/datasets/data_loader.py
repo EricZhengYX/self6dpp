@@ -6,6 +6,7 @@ import pickle
 
 import cv2
 import mmcv
+from PIL import Image
 import numpy as np
 import ref
 import torch
@@ -387,21 +388,6 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 depth_ch = 1
             depth = depth.astype("float32")
 
-        if self.with_norm:
-            assert "norm_file" in dataset_dict, "norm file is not in dataset_dict"
-            norm_path = dataset_dict["norm_file"]
-
-            _suffix = osp.splitext(norm_path)[-1]
-            if _suffix == ".npy":
-                _raw_norm = np.load(norm_path)
-            elif _suffix in [".png", ".jpg", ".jpeg"]:
-                _raw_norm = mmcv.imread(norm_path, "unchanged")
-            else:
-                raise NotImplementedError("Unsupported suffix: {}".format(_suffix))
-            assert _raw_norm.shape == (im_H_ori, im_W_ori, 3), _raw_norm.shape
-            norm_mask = _raw_norm != 0
-            norm = _raw_norm / (np.linalg.norm(_raw_norm, axis=-1, keepdims=True) + 1e-5) * norm_mask
-
         # currently only replace bg for train ###############################
         # some synthetic data already has bg, img_type should be real or something else but not syn
         img_type = dataset_dict.get("img_type", "real")
@@ -507,6 +493,23 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         xyz_crop = xyz_info["xyz_crop"]
         xyz = np.zeros((im_H, im_W, 3), dtype=np.float32)
         xyz[y1 : y2 + 1, x1 : x2 + 1, :] = xyz_crop
+
+        # load norm =======================================================
+        if self.with_norm:
+            assert "norm_file" in inst_infos, "norm file is not in inst_infos"
+            norm_path = inst_infos["norm_file"]
+
+            _suffix = osp.splitext(norm_path)[-1]
+            if _suffix == ".npy":
+                _raw_norm = np.load(norm_path)
+            elif _suffix in [".png", ".jpg", ".jpeg"]:
+                _raw_norm = np.asarray(Image.open(norm_path))
+            else:
+                raise NotImplementedError("Unsupported suffix: {}".format(_suffix))
+            assert _raw_norm.shape == (im_H_ori, im_W_ori, 3), _raw_norm.shape
+            norm_mask = _raw_norm != 0
+            norm = _raw_norm / (np.linalg.norm(_raw_norm, axis=-1, keepdims=True) + 1e-5) * norm_mask
+
         # NOTE: full mask
         mask_obj = (
             ((xyz[:, :, 0] != 0) | (xyz[:, :, 1] != 0) | (xyz[:, :, 2] != 0))
@@ -551,7 +554,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         # roi_norm ---------------------------------------
         if self.with_norm:
             roi_norm = crop_resize_by_warp_affine(
-                norm, bbox_center, scale, input_res, interpolation=cv2.INTER_LINEAR
+                norm, bbox_center, scale, out_res, interpolation=cv2.INTER_LINEAR
             ).transpose(2, 0, 1)
 
         # roi_depth --------------------------------------

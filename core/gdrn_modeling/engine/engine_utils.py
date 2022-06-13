@@ -64,6 +64,7 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
         "roi_xyz", "roi_xyz_bin",
         "roi_mask_trunc", "roi_mask_visib", "roi_mask_obj", "roi_mask_full",
         "roi_vf_visib", "roi_vf_full",
+        "roi_norm",
         "fps",
         "roi_region",
         "ego_rot", "trans",

@@ -475,6 +475,7 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
 
         gt_img = self.normalize_image(cfg, gt_img.transpose(2, 0, 1))
         dataset_dict["gt_img"] = torch.as_tensor(gt_img.astype("float32")).contiguous()
+        dataset_dict["roi_gt_img"] = torch.as_tensor(roi_gt_img.astype("float32")).contiguous()  # no aug
 
         if self.__output_mode == "geo":
             """
@@ -484,32 +485,31 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
             """
             dataset_dict["mode"] = "geo"
             fix_seed = np.random.randint(0, 2022)
+            iaseed(fix_seed)
+            _deterministic_augmenter = self.augmentation_pose_variated.to_deterministic()
+            dataset_dict["geo_augmenter"] = _deterministic_augmenter
 
             def _make_aug(m: np.ndarray, npdtype=np.float32) -> torch.Tensor:
-                iaseed(fix_seed)
                 if m.ndim == 3:
-                    m_aug = self.augmentation_pose_variated(
+                    m_aug = _deterministic_augmenter(
                         image=m.transpose((1, 2, 0))
                     ).astype(npdtype)
                     return torch.as_tensor(m_aug.transpose((2, 0, 1))).contiguous()
                 elif m.ndim == 2:
-                    m_aug = self.augmentation_pose_variated(image=m[..., None]).astype(
+                    m_aug = _deterministic_augmenter(image=m[..., None]).astype(
                         npdtype
                     )
                     return torch.as_tensor(m_aug[..., 0]).contiguous()
                 else:
                     raise TypeError("Wrong shape: {}".format(m.shape))
 
-            dataset_dict["roi_img"] = _make_aug(roi_img)
-            dataset_dict["roi_gt_img"] = _make_aug(roi_gt_img)
-
+            dataset_dict["roi_img"] = _make_aug(roi_img)   # maybe with color aug, also with geo aug
             return dataset_dict
+
         elif self.__output_mode == "pose":
             dataset_dict["mode"] = "pose"
 
-            dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()
-            dataset_dict["roi_gt_img"] = torch.as_tensor(roi_gt_img.astype("float32")).contiguous()
-
+            dataset_dict["roi_img"] = torch.as_tensor(roi_img.astype("float32")).contiguous()  # maybe with color aug
             dataset_dict["roi_points"] = torch.as_tensor(
                 self._get_model_points(dataset_name)[roi_cls].astype("float32")
             )

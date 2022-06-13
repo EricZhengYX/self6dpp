@@ -141,6 +141,10 @@ class GDRN_MaskNormVF(nn.Module):
         g_head_cfg = net_cfg.GEO_HEAD
         pnp_net_cfg = net_cfg.PNP_NET
 
+        # maybe delete in future
+        if do_loss and gt_norm_vis is None:
+            gt_norm_vis = gt_norm_full * gt_mask_vis.unsqueeze(1)
+
         device = x.device
         bs = x.shape[0]
         num_classes = net_cfg.NUM_CLASSES
@@ -1138,8 +1142,7 @@ plt.show()
         return loss_dict
 
     def _render_norm_batch(self, Rs, ts, obj_clss, Ks, Ws, Hs, roi_centers, roi_scales, out_size):
-        models = [self._render_models[LM_13_OBJECTS[int(i)]] for i in obj_clss]
-        # TODO: maybe different when using LMO?
+        models = [self._render_models[int(i)] for i in obj_clss]
 
         renderings = self._renderer.render_batch(
             Rs,

@@ -31,8 +31,9 @@ from core.utils.my_checkpoint import MyCheckpointer
 from core.utils.my_writer import MyCommonMetricPrinter, MyJSONWriter, MyTensorboardXWriter
 from core.utils.data_utils import denormalize_image
 from core.deepim.datasets.data_loader import build_deepim_train_loader, build_deepim_test_loader
-from core.deepim.engine.engine_utils import get_out_mask, vis_batch
+from core.deepim.engine.engine_utils import get_out_mask, vis_batch, compute_self_loss
 from core.deepim.engine.batching import batch_data, batch_updater
+from core.self6dpp.losses.ssim import MS_SSIM
 from .deepim_evaluator import deepim_inference_on_dataset, DeepIM_Evaluator, deepim_save_result_of_dataset
 from .deepim_custom_evaluator import DeepIM_EvaluatorCustom
 
@@ -254,6 +255,12 @@ def do_train(cfg, args, model, optimizer, renderer, resume=False):
         else []
     )
 
+    do_self = cfg.MODEL.get("DO_SELF", False)
+    if do_self:
+        ms_ssim_func = MS_SSIM(data_range=1.0, normalize=True).cuda()
+    else:
+        ms_ssim_func = None
+
     # compared to "train_net.py", we do not support accurate timing and
     # precise BN here, because they are not trivial to implement
     logger.info("Starting training from iteration {}".format(start_iter))
@@ -290,25 +297,53 @@ def do_train(cfg, args, model, optimizer, renderer, resume=False):
                 if cfg.TRAIN.VIS:
                     vis_batch(cfg, batch, phase="train")
                 # forward ============================================================
-                out_dict, loss_dict = model(
-                    batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
-                    x_ren=batch.get("zoom_x_ren", None),
-                    K_zoom=batch["zoom_K"],
-                    init_pose=batch["obj_pose_est"],
-                    obj_class=batch["obj_cls"],
-                    gt_mask_trunc=batch.get("zoom_trunc_mask", None),
-                    gt_mask_visib=batch.get("zoom_visib_mask", None),
-                    # gt_mask_full=batch["zoom_full_mask"],
-                    gt_ego_rot=batch["obj_pose"][:, :3, :3],
-                    gt_trans=batch["obj_pose"][:, :3, 3],
-                    gt_points=batch.get("obj_points", None),
-                    obj_extent=batch.get("obj_extent", None),
-                    sym_info=batch.get("sym_info", None),
-                    gt_flow=batch.get("zoom_flow", None),
-                    # roi_coord_2d=batch.get("roi_coord_2d", None),
-                    do_loss=True,
-                    cur_iter=refine_i,
-                )
+                if not do_self:
+                    out_dict, loss_dict = model(
+                        batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
+                        x_ren=batch.get("zoom_x_ren", None),
+                        K_zoom=batch["zoom_K"],
+                        init_pose=batch["obj_pose_est"],
+                        obj_class=batch["obj_cls"],
+                        gt_mask_trunc=batch.get("zoom_trunc_mask", None),
+                        gt_mask_visib=batch.get("zoom_visib_mask", None),
+                        # gt_mask_full=batch["zoom_full_mask"],
+                        gt_ego_rot=batch["obj_pose"][:, :3, :3],
+                        gt_trans=batch["obj_pose"][:, :3, 3],
+                        gt_points=batch.get("obj_points", None),
+                        obj_extent=batch.get("obj_extent", None),
+                        sym_info=batch.get("sym_info", None),
+                        gt_flow=batch.get("zoom_flow", None),
+                        # roi_coord_2d=batch.get("roi_coord_2d", None),
+                        do_loss=True,
+                        cur_iter=refine_i,
+                    )
+                else:
+                    out_dict = model(
+                        batch["zoom_x"] if "zoom_x" in batch else batch["zoom_x_obs"],
+                        x_ren=batch.get("zoom_x_ren", None),
+                        K_zoom=batch["zoom_K"],
+                        init_pose=batch["obj_pose_est"],
+                        obj_class=batch["obj_cls"],
+                        gt_mask_trunc=batch.get("zoom_trunc_mask", None),
+                        gt_mask_visib=batch.get("zoom_visib_mask", None),
+                        # gt_mask_full=batch["zoom_full_mask"],
+                        gt_ego_rot=batch["obj_pose"][:, :3, :3],
+                        gt_trans=batch["obj_pose"][:, :3, 3],
+                        gt_points=batch.get("obj_points", None),
+                        obj_extent=batch.get("obj_extent", None),
+                        sym_info=batch.get("sym_info", None),
+                        gt_flow=batch.get("zoom_flow", None),
+                        # roi_coord_2d=batch.get("roi_coord_2d", None),
+                        do_loss=False,
+                        cur_iter=refine_i,
+                    )
+                    losses = compute_self_loss(
+                        cfg=cfg,
+                        pred=out_dict,
+                        render_K=batch["zoom_K"],
+
+                    )
+
                 losses = sum(loss_dict.values())
                 assert torch.isfinite(losses).all(), loss_dict
 

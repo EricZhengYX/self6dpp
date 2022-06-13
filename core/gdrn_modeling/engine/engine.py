@@ -375,6 +375,8 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     gt_mask_obj=batch.get("roi_mask_obj", None),
                     gt_vf_vis=batch.get("roi_vf_visib", None),
                     gt_vf_full=batch.get("roi_vf_full", None),
+                    gt_norm_vis=batch.get("roi_norm_vis", None),
+                    gt_norm_full=batch.get("roi_norm", None),
                     gt_region=batch.get("roi_region", None),
                     gt_ego_rot=batch.get("ego_rot", None),
                     gt_trans=batch.get("trans", None),

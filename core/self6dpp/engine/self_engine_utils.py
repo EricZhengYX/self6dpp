@@ -1,6 +1,7 @@
 import re
 import os
 import os.path as osp
+from typing import List
 import io
 from functools import partial
 import torch
@@ -11,6 +12,7 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 import mmcv
+import imgaug.augmenters as iaa
 from einops import rearrange
 from PIL import Image
 from detectron2.layers import paste_masks_in_image
@@ -108,7 +110,7 @@ def compute_self_loss(
 
 def compute_self_loss_geo(
     cfg,
-    batch,
+    batch: dict,
     pred_vis_mask_prob,
     pred_full_mask_prob,
     pred_coor_x,
@@ -128,6 +130,20 @@ def compute_self_loss_geo(
     vis_i = 0
     vis_data = {}
     loss_dict = {}
+
+    if tb_writer is not None:
+        gt_img_vis = batch["gt_img"][vis_i].cpu().numpy()
+        gt_img_vis = denormalize_image(gt_img_vis, cfg)[::-1].astype("uint8")
+        vis_data["gt/image"] = rearrange(gt_img_vis, "c h w -> h w c")
+
+        roi_gt_img_vis = batch["roi_gt_img"][vis_i].cpu().numpy()
+        roi_gt_img_vis = denormalize_image(roi_gt_img_vis, cfg)[::-1].astype("uint8")
+        vis_data["gt/roi_image"] = rearrange(roi_gt_img_vis, "c h w -> h w c")
+
+    # do same augmentations for pseudo labels
+    batch = _apply_augmentation_for_geo_batch(geo_batch={
+        k: v for k, v in batch.items() if "pseudo_" in k
+    }, augmenters=batch["stu_augmenter"])
 
     # visible mask
     pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
@@ -155,14 +171,6 @@ def compute_self_loss_geo(
     '''
 
     if tb_writer is not None:
-        gt_img_vis = batch["gt_img"][vis_i].cpu().numpy()
-        gt_img_vis = denormalize_image(gt_img_vis, cfg)[::-1].astype("uint8")
-        vis_data["gt/image"] = rearrange(gt_img_vis, "c h w -> h w c")
-
-        roi_gt_img_vis = batch["roi_gt_img"][vis_i].cpu().numpy()
-        roi_gt_img_vis = denormalize_image(roi_gt_img_vis, cfg)[::-1].astype("uint8")
-        vis_data["gt/roi_image"] = rearrange(roi_gt_img_vis, "c h w -> h w c")
-
         pseudo_vis_mask_vis = pseudo_vis_mask[vis_i].detach().cpu().numpy()
         vis_data["pseudo/vis_mask_roi"] = pseudo_vis_mask_vis[0]
 
@@ -252,6 +260,37 @@ def compute_self_loss_geo(
     return loss_dict
 
 
+def _apply_augmentation_for_geo_batch(geo_batch: dict, augmenters: List[iaa.Augmenter]):
+    vf_tensor_names = {
+        'pseudo_vis_vf',
+        'pseudo_full_vf'
+    }
+    b = len(augmenters)
+    tensor_obj: torch.Tensor
+    for name, tensor_obj in geo_batch.items():
+        assert tensor_obj.shape[0] == b, \
+            "Shape of tensors should be the same as the length of augmenters, but got {} => {}".\
+                format(name, tensor_obj.shape)
+
+        device = tensor_obj.device
+        tensor_obj_aug = []
+        if name in vf_tensor_names:
+            _, c, _, w, h = tensor_obj.shape
+            for i, t in enumerate(tensor_obj):
+                t_np = t.view(-1, w, h).permute(1, 2, 0).cpu().numpy()
+                t_np_aug = augmenters[i](image=t_np)
+                tensor_obj_aug.append(torch.tensor(t_np_aug.transpose(2, 0, 1).reshape(c, -1, w, h), device=device))
+            geo_batch[name] = torch.stack(tensor_obj_aug)
+        else:
+            _, c, w, h = tensor_obj.shape
+            for i, t in enumerate(tensor_obj):
+                t_np = t.permute(1, 2, 0).cpu().numpy()
+                t_np_aug = augmenters[i](image=t_np)
+                tensor_obj_aug.append(torch.tensor(t_np_aug.transpose(2, 0, 1), device=device))
+            geo_batch[name] = torch.stack(tensor_obj_aug)
+    return geo_batch
+
+
 def compute_self_loss_pose(
     cfg,
     batch,
@@ -290,7 +329,7 @@ def compute_self_loss_pose(
         batch["K_renderer"][:, 1, 2] += cfg.RENDERER.DIBR.V_OFFSET  # HACK: DIBR renderer has some v offset bug!!
 
     # get rendered mask/rgb/depth/xyz using DIBR
-    cur_models = [ren_models[LM_13_OBJECTS[int(_l)]] for _l in batch["roi_cls"]]  # TODO: LMO
+    cur_models = [ren_models[int(_l)] for _l in batch["roi_cls"]]
 
     if cfg.RENDERER.DIFF_RENDERER == "DIBR":
         ren_func = {
@@ -299,7 +338,7 @@ def compute_self_loss_pose(
             "batch_tex": partial(ren.render_batch_tex, max_mip_level=9, uv_type="vertex"),
             "batch_single_tex": partial(ren.render_batch_single_tex, max_mip_level=9, uv_type="vertex"),
         }[cfg.RENDERER.RENDER_TYPE]
-    elif cfg.RENDERER.DIFF_RENDERER == "new_DIBR":
+    elif cfg.RENDERER.DIFF_RENDERER in ["new_DIBR", "dibr"]:
         ren_func = {"batch": partial(ren.render_batch), "batch_tex": partial(ren.render_batch_tex, uv_type="face")}[
             cfg.RENDERER.RENDER_TYPE
         ]
@@ -810,7 +849,8 @@ def batch_data_self_geo(cfg, data, model_teacher, device):
     batch = {
         "roi_img": torch.stack([d["roi_img"] for d in data], dim=0).to(device, non_blocking=True),
         "roi_gt_img": torch.stack([d["roi_gt_img"] for d in data], dim=0).to(device, non_blocking=True),
-        "gt_img": torch.stack([d["gt_img"] for d in data], dim=0).to(device, non_blocking=True)
+        "gt_img": torch.stack([d["gt_img"] for d in data], dim=0).to(device, non_blocking=True),
+        "stu_augmenter": [d["geo_augmenter"] for d in data],
     }
     # get pose related pseudo labels from teacher model --------------------------
     with torch.no_grad():
@@ -971,15 +1011,15 @@ def my_get_DIBR_models_renderer(cfg, data_ref, obj_names, preloaded="models_all_
         mmcv.dump(models, full_pth)
 
     std_dtype = torch.float32
-    models_selected = {}
+    models_selected = []
     for name in obj_names:
         model = models[name]
-        models_selected[name] = {
+        models_selected.append({
             "vertices": torch.tensor(model["pts"], device='cuda', dtype=std_dtype),
             "colors": torch.tensor(model["colors"], device='cuda', dtype=std_dtype),
             "normals": torch.tensor(model["normals"], device='cuda', dtype=std_dtype),
             "faces": torch.tensor(model["faces"], device='cuda', dtype=std_dtype),
-        }
+        })
 
     ren_dibr = Renderer_dibr(
         height=cfg.RENDERER.DIBR.HEIGHT, width=cfg.RENDERER.DIBR.WIDTH, mode=cfg.RENDERER.DIBR.MODE

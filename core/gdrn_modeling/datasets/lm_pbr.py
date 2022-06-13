@@ -39,6 +39,8 @@ class LM_PBR_Dataset:
 
         self.dataset_root = data_cfg.get("dataset_root", osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr"))
         self.xyz_root = data_cfg.get("xyz_root", osp.join(self.dataset_root, "xyz_crop"))
+        self.norm_root = data_cfg.get("norm", osp.join(self.dataset_root, "norm"))
+
         assert osp.exists(self.dataset_root), self.dataset_root
         self.models_root = data_cfg["models_root"]  # BOP_DATASETS/lm/models
         self.scale_to_meter = data_cfg["scale_to_meter"]  # 0.001
@@ -183,6 +185,11 @@ class LM_PBR_Dataset:
                         f"{scene_id:06d}/{int_im_id:06d}_{anno_i:06d}-xyz.pkl",
                     )
                     assert osp.exists(xyz_path), xyz_path
+                    norm_path = osp.join(
+                        self.norm_root,
+                        f"{scene_id:06d}/{int_im_id:06d}_{anno_i:06d}.png",
+                    )
+                    assert osp.exists(norm_path), norm_path
                     inst = {
                         "category_id": cur_label,  # 0-based label
                         "bbox": bbox_visib,  # TODO: load both bbox_obj and bbox_visib
@@ -195,6 +202,7 @@ class LM_PBR_Dataset:
                         "mask_full": mask_full_rle,
                         "visib_fract": visib_fract,
                         "xyz_path": xyz_path,
+                        "norm_file": norm_path,
                     }
 
                     model_info = self.models_info[str(obj_id)]
@@ -330,6 +338,7 @@ SPLITS_LM_PBR = dict(
         dataset_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr"),
         models_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/models"),
         xyz_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr/xyz_crop"),
+        norm_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr/norm"),
         scale_to_meter=0.001,
         with_masks=True,  # (load masks but may not use it)
         with_depth=True,  # (load depth path here, but may not use it)
@@ -347,6 +356,7 @@ SPLITS_LM_PBR = dict(
         dataset_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/train_pbr"),
         models_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/models"),
         xyz_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/train_pbr/xyz_crop"),
+        norm_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/train_pbr/norm"),
         scale_to_meter=0.001,
         with_masks=True,  # (load masks but may not use it)
         with_depth=True,  # (load depth path here, but may not use it)
@@ -375,6 +385,7 @@ for obj in ref.lm_full.objects:
                 dataset_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr"),
                 models_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/models"),
                 xyz_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr/xyz_crop"),
+                norm_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lm/train_pbr/norm"),
                 scale_to_meter=0.001,
                 with_masks=True,  # (load masks but may not use it)
                 with_depth=True,  # (load depth path here, but may not use it)
@@ -402,6 +413,7 @@ for obj in ref.lmo_full.objects:
                 dataset_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/train_pbr"),
                 models_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/models"),
                 xyz_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/train_pbr/xyz_crop"),
+                norm_root=osp.join(DATASETS_ROOT, "BOP_DATASETS/lmo/train_pbr/norm"),
                 scale_to_meter=0.001,
                 with_masks=True,  # (load masks but may not use it)
                 with_depth=True,  # (load depth path here, but may not use it)

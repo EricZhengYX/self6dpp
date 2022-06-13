@@ -15,7 +15,7 @@ from lib.pysixd.inout import load_ply
 matplotlib.use("TkAgg")
 
 pbr_cache_pth = (
-    ".cache/dataset_dicts_lm_pbr_13_train_beeefb9c0a880ca05b58607843b4b15b.pkl"
+    "/home/yan/ericzyx/workspace/self6dpp/.cache/dataset_dicts_lm_pbr_13_train_e128499fdda696ebf531290f0204ffb9.pkl"
 )
 if "lm_pbr" in pbr_cache_pth:
     dataset_type = "lm"
@@ -27,6 +27,10 @@ else:
 norm_key = "norm_file"
 DEBUG = False
 AS_IMAGE = True
+if AS_IMAGE:
+    norm_file_suffix = ".png"
+else:
+    norm_file_suffix = ".npy"
 
 
 def load_models(pth="datasets/BOP_DATASETS/lm/models"):
@@ -62,13 +66,14 @@ if __name__ == "__main__":
         K = single_img_dict["cam"]
         H, W = single_img_dict["height"], single_img_dict["width"]
         for single_obj_anno in single_img_dict["annotations"]:
-            if norm_key in single_obj_anno and single_obj_anno[norm_key] is not None:
-                continue
             norm_pth = (
-                single_obj_anno["mask_full_file"]
-                .replace("mask", "norm")
-                .replace(".png", ".pkl")
+                single_obj_anno['xyz_path']
+                .replace("xyz_crop", "norm")
+                .replace("-xyz.pkl", norm_file_suffix)
             )
+            single_obj_anno[norm_key] = norm_pth
+            if osp.exists(norm_pth):
+                continue
             mmcv.mkdir_or_exist(osp.dirname(norm_pth))
             category_id = single_obj_anno["category_id"]
             cate_name = LM_13_OBJECTS[
@@ -108,3 +113,4 @@ if __name__ == "__main__":
             else:
                 # saving as image(0-255) may bring round-off error
                 mmcv.dump(norm_fig, norm_pth)  # approx 3.7M
+    mmcv.dump(pbr_cache, osp.basename(pbr_cache_pth))

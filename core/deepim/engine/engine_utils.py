@@ -207,3 +207,15 @@ def vis_batch(cfg, batch, phase="train"):
         nrow = int(np.ceil(len(show_ims) / ncol))
         grid_show(show_ims, show_titles, row=nrow, col=ncol)
     # yapf: enable
+
+
+def compute_self_loss(
+        cfg,
+        pred,
+        render_K,
+        renderer,
+        render_model,
+        roi_gt_img,
+        ms_ssim_func,
+):
+    pass
