@@ -19,6 +19,7 @@ from core.utils.data_utils import (
     read_image_mmcv,
     xyz_to_region,
     compute_vf,
+    compute_vf_roi_faster,
 )
 from core.utils.dataset_utils import (
     filter_empty_dets,
@@ -145,7 +146,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 process instead of making a copy.
         """
         self.augmentation = build_gdrn_augmentation(cfg, is_train=(split == "train"))
-        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(cfg, is_train=(split == "train"))
+        self.augmentation_pose_variated = build_gdrn_augmentation_pose_variated(
+            cfg, is_train=(split == "train")
+        )
         if cfg.INPUT.COLOR_AUG_PROB > 0 and cfg.INPUT.COLOR_AUG_TYPE.lower() == "ssd":
             self.augmentation.append(ColorAugSSDTransform(img_format=cfg.INPUT.FORMAT))
             logging.getLogger(__name__).info(
@@ -508,7 +511,11 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 raise NotImplementedError("Unsupported suffix: {}".format(_suffix))
             assert _raw_norm.shape == (im_H_ori, im_W_ori, 3), _raw_norm.shape
             norm_mask = _raw_norm != 0
-            norm = _raw_norm / (np.linalg.norm(_raw_norm, axis=-1, keepdims=True) + 1e-5) * norm_mask
+            norm = (
+                _raw_norm
+                / (np.linalg.norm(_raw_norm, axis=-1, keepdims=True) + 1e-5)
+                * norm_mask
+            )
 
         # NOTE: full mask
         mask_obj = (
@@ -702,49 +709,9 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             fps_points = self._get_fps_points(dataset_name, g_head_cfg.NUM_CHANNAL_VF)[
                 roi_cls
             ]
-            # roi_offset = bbox_center - scale / 2
-            vf_full, vf_visib = compute_vf(
-                mask_full, mask_visib, fps_points, K, pose
-            )  # f * H * W * 2
-            _h, _w, _f, _c = vf_full.shape
-
-            roi_vf_full = (
-                crop_resize_by_warp_affine(
-                    vf_full.reshape(_h, _w, -1),
-                    bbox_center,
-                    scale,
-                    out_res,
-                    interpolation=mask_xyz_interp,
-                )
-                .reshape(out_res, out_res, _f * _c)
-                .transpose(2, 0, 1)
-            )  # 32*64*64
-            roi_vf_visib = (
-                crop_resize_by_warp_affine(
-                    vf_visib.reshape(_h, _w, -1),
-                    bbox_center,
-                    scale,
-                    out_res,
-                    interpolation=mask_xyz_interp,
-                )
-                .reshape(out_res, out_res, _f * _c)
-                .transpose(2, 0, 1)
-            )  # 32*64*64
-            """
-            img = read_image_mmcv(dataset_dict["file_name"], format=self.img_format)
-            iimg=crop_resize_by_warp_affine(
-                img, bbox_center, scale, input_res, interpolation=cv2.INTER_LINEAR
+            roi_vf_full, roi_vf_visib = compute_vf_roi_faster(
+                roi_mask_full, roi_mask_visib, fps_points, K, pose, bbox_center, scale
             )
-            i = 1
-            plt.figure()
-            plt.subplot(1,3,1)
-            plt.imshow(roi_vf_visib[2 * i + 0, ...])
-            plt.subplot(1,3,2)
-            plt.imshow(roi_vf_visib[2 * i + 1, ...])
-            plt.subplot(1,3,3)
-            plt.imshow(iimg)
-            plt.show()
-            """
 
         if self.__output_mode == "geo":
             """
@@ -763,21 +730,27 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             """
             dataset_dict["mode"] = "geo"
             fix_seed = np.random.randint(0, 2022)
+            iaseed(fix_seed)
+            deterministic_aug = self.augmentation_pose_variated.to_deterministic()
 
             def _make_aug(m: np.ndarray, npdtype=np.float32) -> torch.Tensor:
-                iaseed(fix_seed)
-                if m.ndim == 3:
-                    m_aug = self.augmentation_pose_variated(
-                        image=m.transpose((1, 2, 0))
-                    ).astype(npdtype)
+                if m.ndim == 3:  # HWC
+                    m_aug = deterministic_aug(image=m.transpose((1, 2, 0))).astype(npdtype)
                     return torch.as_tensor(m_aug.transpose((2, 0, 1))).contiguous()
-                elif m.ndim == 2:
-                    m_aug = self.augmentation_pose_variated(image=m[..., None]).astype(
-                        npdtype
-                    )
+                elif m.ndim == 2:  # HW
+                    m_aug = deterministic_aug(image=m[..., None]).astype(npdtype)
                     return torch.as_tensor(m_aug[..., 0]).contiguous()
                 else:
                     raise TypeError("Wrong shape: {}".format(m.shape))
+
+            def _make_aug_vf(vf: np.ndarray, npdtype=np.float32) -> torch.Tensor:
+                """
+                @param vf: 64*64*32
+                @param npdtype: np.dtype
+                """
+                vf_aug = deterministic_aug(image=vf.reshape(out_res, out_res, -1)).astype(npdtype)
+                vf_aug = vf_aug.reshape(out_res, out_res, -1, 2).transpose((2, 3, 0, 1))
+                return torch.as_tensor(vf_aug).contiguous()
 
             dataset_dict["roi_img"] = _make_aug(roi_img)
             dataset_dict["roi_xyz"] = _make_aug(roi_xyz)
@@ -788,12 +761,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             if g_head_cfg.NUM_REGIONS > 1:
                 dataset_dict["roi_region"] = _make_aug(roi_region, np.int32)
             if g_head_cfg.NUM_CHANNAL_VF > 1:
-                dataset_dict["roi_vf_full"] = _make_aug(roi_vf_full).reshape(
-                    -1, 2, out_res, out_res
-                )
-                dataset_dict["roi_vf_visib"] = _make_aug(roi_vf_visib).reshape(
-                    -1, 2, out_res, out_res
-                )
+                dataset_dict["roi_vf_full"] = _make_aug_vf(roi_vf_full)
+                dataset_dict["roi_vf_visib"] = _make_aug_vf(roi_vf_visib)
             dataset_dict["roi_mask_trunc"] = _make_aug(roi_mask_trunc)
             dataset_dict["roi_mask_visib"] = _make_aug(roi_mask_visib)
             dataset_dict["roi_mask_obj"] = _make_aug(roi_mask_obj)
@@ -828,10 +797,10 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 ).contiguous()
             if g_head_cfg.NUM_CHANNAL_VF > 1:
                 dataset_dict["roi_vf_full"] = torch.as_tensor(
-                    roi_vf_full.reshape(-1, 2, out_res, out_res).astype(np.float)
+                    roi_vf_full.transpose(2, 3, 0, 1).astype(np.float)
                 ).contiguous()
                 dataset_dict["roi_vf_visib"] = torch.as_tensor(
-                    roi_vf_visib.reshape(-1, 2, out_res, out_res).astype(np.float)
+                    roi_vf_visib.transpose(2, 3, 0, 1).astype(np.float)
                 ).contiguous()
                 dataset_dict["fps"] = torch.as_tensor(
                     fps_points.astype("float32")
@@ -870,7 +839,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             dataset_dict["roi_wh"] = torch.as_tensor(
                 np.array([bw, bh], dtype=np.float32)
             )
-            dataset_dict["roi_extent"] = torch.tensor(roi_extent, dtype=torch.float32)
+            dataset_dict["roi_extent"] = torch.as_tensor(roi_extent, dtype=torch.float32)
             dataset_dict["resize_ratio"] = resize_ratio = out_res / scale
             z_ratio = inst_infos["trans"][2] / resize_ratio
             obj_center = anno["centroid_2d"]
@@ -1061,7 +1030,7 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 # can not convert to tensor
                 dataset_dict[_key] = roi_infos[_key]
             else:
-                dataset_dict[_key] = torch.tensor(roi_infos[_key])
+                dataset_dict[_key] = torch.as_tensor(roi_infos[_key])
 
         return dataset_dict
 
@@ -1072,6 +1041,14 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         edges = get_edge(xyz)
         xyz[edges != 0] = xyz_blur[edges != 0]
         return xyz
+
+    def _load_vf(self, pth: str, nfps: int):
+        nchar = len(str(nfps))
+        vf = []
+        for fps_i in range(nfps):
+            dummy = []
+            for ci, ch in enumerate(["u", "v"]):
+                single_pth = osp.join(pth, str(fps_i).zfill(nchar) + ch + ".png")
 
     def get_current_output_mode(self):
         return self.__output_mode

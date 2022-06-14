@@ -29,7 +29,9 @@ else:
     raise NotImplementedError
 vf_key = "vf_file"
 DEBUG = False
-vf_file_suffix = ".pkl"
+vf_file_suffix = ".png"
+NFPS = 16
+nchar = len(str(NFPS))
 
 
 def load_fps(pth="datasets/BOP_DATASETS/lm/models/fps_points.pkl", cls_name=cls_name, nfps=16):
@@ -39,37 +41,65 @@ def load_fps(pth="datasets/BOP_DATASETS/lm/models/fps_points.pkl", cls_name=cls_
     return fps[key_name][:-1]  # nfps*3
 
 
+def scale_0255(m):
+    assert m.max() <= 1 and m.min() >= -1
+    return ((m + 1) / 2 * 255).astype(np.uint8)
+
+
 if __name__ == "__main__":
     pbr_cache = mmcv.load(pbr_cache_pth)
-    fps16 = load_fps()
+    fps16 = load_fps(nfps=NFPS)
 
     for single_img_dict in tqdm(pbr_cache):
         if "annotations" not in single_img_dict:
             continue
         K = single_img_dict["cam"]
         H, W = single_img_dict["height"], single_img_dict["width"]
-        fake_mask = np.ones((H, W))
 
         for single_obj_anno in single_img_dict["annotations"]:
             pose = single_obj_anno["pose"]
             if single_obj_anno.get('mask_full_file', None) is not None:
-                vf_pth = (
-                    single_obj_anno['mask_full_file']
-                    .replace("mask", "vf")
-                    .replace(".png", vf_file_suffix)
-                )
+                _pth = single_obj_anno['mask_full_file']
+                base_pth = osp.abspath(osp.join(_pth, "../../.."))
+                seq_name = _pth.split('/')[-3]
+                obj_name = re.match("\d+_\d+", _pth.split('/')[-1]).group()
             elif single_obj_anno.get('xyz_path', None) is not None:
-                vf_pth = (
-                    single_obj_anno['xyz_path']
-                    .replace("xyz_crop", "vf")
-                    .replace("-xyz.pkl", vf_file_suffix)
-                )
+                _pth = single_obj_anno['xyz_path']
+                base_pth = osp.abspath(osp.join(_pth, "../../.."))
+                seq_name = _pth.split('/')[-2]
+                obj_name = re.match("\d+_\d+", _pth.split('/')[-1]).group()
             else:
                 raise ValueError("Cannot phrase vf path.")
-            single_obj_anno[vf_key] = vf_pth
-            if osp.exists(vf_pth):
-                continue
-            mmcv.mkdir_or_exist(osp.dirname(vf_pth))
-            vf, _ = compute_vf(fake_mask, fake_mask, fps16, K, pose)
+            vf_full_pth = osp.join(base_pth, "vf_full", seq_name, obj_name)
+            vf_visib_pth = osp.join(base_pth, "vf_visib", seq_name, obj_name)
+            mask_full_pth = osp.join(base_pth, seq_name, "mask", obj_name+".png")
+            mask_visib_pth = osp.join(base_pth, seq_name, "mask_visib", obj_name+".png")
 
-            mmcv.dump(vf.astype(np.float16), vf_pth)  # approx 300k
+            single_obj_anno["vf_full_base"] = vf_full_pth
+            single_obj_anno["vf_visib_base"] = vf_visib_pth
+            # currently cannot resume!
+            mmcv.mkdir_or_exist(vf_full_pth)
+            mmcv.mkdir_or_exist(vf_visib_pth)
+
+            # load masks
+            mask_full = np.asarray(Image.open(mask_full_pth)) > 0
+            mask_visib = np.asarray(Image.open(mask_visib_pth)) > 0
+
+            vf_f, vf_v = compute_vf(mask_full, mask_visib, fps16, K, pose)
+            vf_f_255 = scale_0255(vf_f)
+            vf_v_255 = scale_0255(vf_v)
+
+            # for vf full
+            for fps_i in range(NFPS):
+                for ci, ch in enumerate(["u", "v"]):
+                    img = vf_f_255[..., fps_i, ci]
+                    save_pth = osp.join(vf_full_pth, str(fps_i).zfill(nchar) + ch + ".png")
+                    Image.fromarray(img).save(save_pth)
+
+            # for vf visib
+            for fps_i in range(NFPS):
+                for ci, ch in enumerate(["u", "v"]):
+                    img = vf_v_255[..., fps_i, ci]
+                    save_pth = osp.join(vf_visib_pth, str(fps_i).zfill(nchar) + ch + ".png")
+                    Image.fromarray(img).save(save_pth)
+    mmcv.dump(pbr_cache, osp.basename(pbr_cache_pth))

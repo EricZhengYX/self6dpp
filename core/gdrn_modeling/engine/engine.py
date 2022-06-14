@@ -351,6 +351,8 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 data = next(data_loader_iter)
                 this_iter_data_mode = data_loader.dataset.get_current_output_mode()
 
+            storage.put_scalar("forward_mode", 0 if this_iter_data_mode == "pose" else 1, smoothing_hint=False)
+
             if iter_time is not None:
                 storage.put_scalar("time", time.perf_counter() - iter_time)
             iter_time = time.perf_counter()

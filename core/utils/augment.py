@@ -1,12 +1,17 @@
 import random
+import logging
 from typing import Tuple
 import os
 import os.path as osp
 import cv2
+from tqdm import tqdm
 import numpy as np
 import imgaug.augmenters as iaa
 import imgaug.parameters as iap
 from imgaug.augmenters.arithmetic import multiply_elementwise
+
+
+logger = logging.getLogger(__name__)
 
 
 class AugmentRGB(object):
@@ -269,7 +274,15 @@ class AugmentRGB(object):
 
 
 class CoarseImgPatch(iaa.CoarseDropout):
-    def __init__(self, p=(0.02, 0.1), size_px=None, size_percent=None, image_pth=None):
+    def __init__(
+        self,
+        p=(0.02, 0.1),
+        size_px=None,
+        size_percent=None,
+        image_pth=None,
+        cached_img=False,
+        cached_img_limit=5000,
+    ):
         super().__init__(
             p=p,
             size_px=size_px,
@@ -286,8 +299,33 @@ class CoarseImgPatch(iaa.CoarseDropout):
             obj = osp.join(osp.abspath(image_pth), obj)
             if osp.isfile(obj) and osp.splitext(obj)[1] in {".png", ".jpg", "jpeg"}:
                 self.__img_list.append(obj)
-        assert len(self.__img_list), image_pth
-        self.__img_picker = iap.Choice(self.__img_list)
+
+        np.random.shuffle(self.__img_list)
+        self.__img_list = self.__img_list[: cached_img_limit]
+        img_cnt = len(self.__img_list)
+        assert img_cnt, image_pth
+
+        self.__img_cache = []
+        if cached_img:
+            logger.warning(
+                "You are trying to preload all {} backgrounds which will be used during color_aug::CoarseImgPatch. "
+                "You can set cfg.INPUT.COLOR_AUG_CACHED_BG=False to disable this feature.".format(
+                    img_cnt
+                )
+            )
+            size_sum = 0
+            for img_dir in tqdm(self.__img_list):
+                img: np.ndarray = cv2.imread(img_dir).astype(np.uint8)
+                self.__img_cache.append(img)
+                h, w, c = img.shape
+                size_sum += h * w * c
+            logger.warning(
+                "{} background images are cached, take approx {:.2f} GiB".format(
+                    img_cnt, size_sum / 1024 ** 3
+                )
+            )
+
+        self.__img_id_picker = iap.Choice(list(range(img_cnt)))
         self.__random_crop_gen = iap.Uniform(0, 1)
 
     def _augment_batch_(self, batch, random_state, parents, hooks):
@@ -316,9 +354,10 @@ class CoarseImgPatch(iaa.CoarseDropout):
             mask = self.mul.draw_samples(sample_shape, random_state=rs)
             inv_mask = 1 - mask
 
-            img_dir = self.__img_picker.draw_samples(1, random_state=rs)[0]
+            img_id = self.__img_id_picker.draw_samples(1, random_state=rs)[0]
+            bg_ori_img = self._get_bg(img_id)
             background = self._background_img_preprocess(
-                img_dir, mask.shape, random_state=rs
+                bg_ori_img, mask.shape, random_state=rs
             )
 
             if mask.dtype.kind != "b" and is_mul_binomial:
@@ -331,10 +370,16 @@ class CoarseImgPatch(iaa.CoarseDropout):
 
         return batch
 
+    def _get_bg(self, img_id: int):
+        if len(self.__img_cache) == 0:
+            img_dir = self.__img_list[img_id]
+            return cv2.imread(img_dir)
+        else:
+            return self.__img_cache[img_id]
+
     def _background_img_preprocess(
-        self, img_dir: str, align_size: Tuple[int, int], random_state
+        self, img: np.ndarray, align_size: Tuple[int, int, int], random_state
     ):
-        img = cv2.imread(img_dir)
         align_h, align_w, _ = align_size
         ori_h, ori_w, _ = img.shape
         h_ratio, w_ratio = align_h / ori_h, align_w / ori_w
@@ -348,15 +393,23 @@ class CoarseImgPatch(iaa.CoarseDropout):
         return res[t_space : t_space + align_h, l_space : l_space + align_w, :]
 
 
-def build_iaa_color_augmenter(bg_replace_pth=None):
+def build_iaa_color_augmenter(bg_replace_pth=None, cached_img=False):
     seq = iaa.Sequential(
         [
-            iaa.Sometimes(0.5, CoarseImgPatch(p=0.2, size_percent=0.05, image_pth=bg_replace_pth)),
+            iaa.Sometimes(
+                0.5,
+                CoarseImgPatch(
+                    p=0.2,
+                    size_percent=0.05,
+                    image_pth=bg_replace_pth,
+                    cached_img=cached_img,
+                ),
+            ),
             iaa.Sometimes(0.5, iaa.GaussianBlur(1.2 * np.random.rand())),
-            iaa.Sometimes(0.3, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
-            iaa.Sometimes(0.3, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
-            iaa.Sometimes(0.5, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
-            iaa.Sometimes(0.3, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+            iaa.Sometimes(0.3, iaa.pillike.EnhanceSharpness(factor=(0.0, 50.0))),
+            iaa.Sometimes(0.3, iaa.pillike.EnhanceContrast(factor=(0.2, 50.0))),
+            iaa.Sometimes(0.5, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.0))),
+            iaa.Sometimes(0.3, iaa.pillike.EnhanceColor(factor=(0.0, 20.0))),
             iaa.Sometimes(0.5, iaa.Add((-25, 25), per_channel=0.3)),
             iaa.Sometimes(0.3, iaa.Invert(0.2, per_channel=True)),
             iaa.Sometimes(0.5, iaa.Multiply((0.6, 1.4), per_channel=0.5)),

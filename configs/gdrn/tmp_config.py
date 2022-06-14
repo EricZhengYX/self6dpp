@@ -8,6 +8,7 @@ INPUT = dict(
     COLOR_AUG_PROB=0.8,
     COLOR_AUG_TYPE="iaa_custom",
     COLOR_AUG_BG_REPLACE="datasets/VOCdevkit/VOC2012/JPEGImages",
+    COLOR_AUG_CACHED_BG=True,
     COLOR_AUG_CODE=(
         "Sequential(["
         # Sometimes(0.5, PerspectiveTransform(0.05)),
@@ -71,7 +72,7 @@ RENDERER = dict(
 )  # DIBR | dibr | new_DIBR
 
 DATASETS = dict(
-    TRAIN=("lmo_pbr_ape_train",),  # lm_pbr_ape_train, lm_real_ape_train, lmo_test, lm_real_ape_test
+    TRAIN=("lm_real_ape_train",),  # lm_pbr_ape_train, lm_real_ape_train, lmo_test, lm_real_ape_test lm_pbr_holepuncher_train
     TEST=("lmo_test",),  # lmo_test lm_real_ape_test
     DET_FILES_TEST=(
         "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",

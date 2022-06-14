@@ -97,12 +97,12 @@ def crop_resize_by_d2_roialign(
     elif in_format == "HWC":
         img = img.transpose(2, 0, 1)  # CHW
 
-    img_tensor = torch.tensor(img[None].astype("float32"))
+    img_tensor = torch.as_tensor(img[None].astype("float32"))
     cx, cy = center
     if isinstance(scale, (int, float)):
         scale = (scale, scale)
     bw, bh = scale
-    rois = torch.tensor(
+    rois = torch.as_tensor(
         np.array(
             [0] + [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2],
             dtype="float32",
@@ -317,6 +317,43 @@ def compute_vf(mask_full, mask_visib, fps_points, K, pose, normalized=True):  # 
     return vf_full, vf_visib
 
 
+def compute_vf_roi_faster(roi_mask_full, roi_mask_visib, fps_points, K, pose, roi_center, roi_scale):  # 'vf' means vector field
+    """
+    @param roi_mask_full: h*w
+    @param roi_mask_visib: h*w
+    @param fps_points: f*3
+    @param K: 3*3
+    @param pose: 3*4
+    @param roi_center: 2
+    @param roi_scale: 1
+    @return: h*w*f*2, h*w*f*2
+
+    """
+    h, w = roi_mask_full.shape
+    f, _ = fps_points.shape
+
+    rot, trans = pose[:3, :3], pose[:3, 3:]
+    pixel_ids = project_pts(fps_points, K, rot, trans)  # (f, 2)
+
+    x0, y0 = roi_center - roi_scale / 2
+    x1, y1 = roi_center + roi_scale / 2
+
+    linspace_x = np.linspace(x0, x1, h)
+    linspace_y = np.linspace(y0, y1, w)
+    x_pos, y_pos = np.meshgrid(linspace_x, linspace_y)
+
+    mesh = np.dstack((x_pos, y_pos))[..., None, :]
+    fps_pixel = pixel_ids[None, None, ...]
+
+    vf = fps_pixel - mesh  # (h, w, f, 2)
+    vf_normal = vf / np.linalg.norm(vf, axis=-1, keepdims=True)
+
+    vf_full = roi_mask_full[..., None, None] * vf_normal
+    vf_visib = roi_mask_visib[..., None, None] * vf_normal
+
+    return vf_full, vf_visib
+
+
 def compute_vf_torch(mask, fps_points, K, R, T, roi_center, roi_scale):  # 'vf' means vector field
     '''
 
@@ -427,7 +464,7 @@ def get_2d_coord_tensor(bs, height, width, low=0, high=1, dtype=torch.float32, d
     y = np.linspace(low, high, height, dtype=np.float32, endpoint=endpoint)
     xy = np.meshgrid(x, y)
     coord = np.stack([xy for _ in range(bs)])
-    coord_tensor = torch.tensor(coord, dtype=dtype, device=device)
+    coord_tensor = torch.as_tensor(coord, dtype=dtype, device=device)
     coord_tensor = coord_tensor.view(bs, 2, height, width)
 
     return coord_tensor  # [bs, 2, h, w]

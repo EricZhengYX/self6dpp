@@ -301,7 +301,10 @@ class Base_DatasetFromList(data.Dataset):
             ], p=0.8)"""
             color_augmentor = eval(self.color_aug_code)
         elif aug_type.lower() == 'iaa_custom':
-            color_augmentor = build_iaa_color_augmenter(bg_replace_pth=self.cfg.INPUT.COLOR_AUG_BG_REPLACE)
+            color_augmentor = build_iaa_color_augmenter(
+                bg_replace_pth=self.cfg.INPUT.COLOR_AUG_BG_REPLACE,
+                cached_img=self.cfg.INPUT.COLOR_AUG_CACHED_BG,
+            )
         else:
             color_augmentor = None
         # fmt: on

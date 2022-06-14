@@ -731,7 +731,7 @@ plt.show()
                     out_size=(w, h),
                 )
 
-                loss_dict["loss_vf_rt"] = loss_cfg.NORM_RT_LW * self.norm_loss_func(
+                loss_dict["loss_norm_rt"] = loss_cfg.NORM_RT_LW * self.norm_loss_func(
                     masked_out_norm_full, masked_rt_norm_full, _mask
                 )
         # endregion
@@ -1156,7 +1156,7 @@ plt.show()
         norm_img = renderings["norm"].permute(0, 3, 1, 2)
 
         b = Rs.shape[0]
-        _dummy = torch.tensor([[-0.5, -0.5, 0.5, 0.5]], device=roi_centers.device).repeat((b, 1))
+        _dummy = torch.as_tensor([[-0.5, -0.5, 0.5, 0.5]], device=roi_centers.device).repeat((b, 1))
         rois = torch.hstack((roi_centers, roi_centers)) + torch.diag(roi_scales) @ _dummy
         rois = torch.hstack((
             torch.linspace(0, b - 1, b, device=roi_centers.device).unsqueeze(-1), rois
