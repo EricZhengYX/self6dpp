@@ -1,14 +1,14 @@
-_base_ = ["../_base_/gdrn_base.py", "../_base_/renderer_base.py"]
+_base_ = ["../../_base_/gdrn_base.py", "../../_base_/renderer_base.py"]
 
-OUTPUT_DIR = "output/gdrn/lm_pbr/my_config/ape"
+OUTPUT_DIR = "output/gdrn/lm_pbr/new_cfg/holepuncher"
 INPUT = dict(
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
-    CHANGE_BG_PROB=0.,  # 0.5
+    CHANGE_BG_PROB=0.5,  # 0.5
     COLOR_AUG_PROB=0.8,
     COLOR_AUG_TYPE="iaa_custom",
     COLOR_AUG_BG_REPLACE="datasets/VOCdevkit/VOC2012/JPEGImages",
-    COLOR_AUG_CACHED_BG=False,
+    COLOR_AUG_CACHED_BG=True,
     COLOR_AUG_CODE=(
         "Sequential(["
         # Sometimes(0.5, PerspectiveTransform(0.05)),
@@ -47,7 +47,7 @@ INPUT = dict(
             LOWER_LIM=0.75,
         )
     ),
-    WITH_PRECOMPUTE_NORM=False,
+    WITH_PRECOMPUTE_NORM=True,
 )
 
 SOLVER = dict(
@@ -72,11 +72,11 @@ RENDERER = dict(
 )  # DIBR | dibr | new_DIBR
 
 DATASETS = dict(
-    TRAIN=("lm_real_ape_train",),  # lm_pbr_ape_train, lm_real_ape_train, lmo_test, lm_real_ape_test lm_pbr_holepuncher_train
-    TEST=("lmo_test",),  # lmo_test lm_real_ape_test
+    TRAIN=("lm_pbr_holepuncher_train",),
+    TEST=("lmo_holepuncher_test", "lm_real_holepuncher_test"),
     DET_FILES_TEST=(
         "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
-        # "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
+        "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
     ),
 )
 
@@ -99,7 +99,7 @@ MODEL = dict(
                 out_indices=(4,),
             ),
         ),
-        ## geo head: Mask, XYZ, Region, VF
+        ## geo head: Mask, XYZ, Region, VF, NORM
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(

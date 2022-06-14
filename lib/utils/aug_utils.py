@@ -34,10 +34,11 @@ class RandomZoom(T.Augmentation):
 
 
 def build_gdrn_augmentation_pose_variated(cfg, is_train: bool) -> iaa.Augmenter:
-    """Create a list of :class:`Augmentation` from config.
+    """
 
-    Returns:
-        list[Augmentation]
+    @param cfg: config
+    @param is_train: bool
+    @return: when test: iaa.Noop (do nothing)
     """
     if not is_train:
         return iaa.Noop()
