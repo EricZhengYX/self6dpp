@@ -57,7 +57,7 @@ SOLVER = dict(
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
-    OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-4, weight_decay=0),
+    OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-6, weight_decay=0),
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=100,  # NOTE: only real data, iterations are very small
@@ -111,7 +111,7 @@ Turn into GDRN_MaskNormVF
 
 RENDERER = dict(
     ENABLE=False,
-    DIFF_RENDERER="dibr",
+    DIFF_RENDERER="new_DIBR",
 )  # DIBR | dibr | new_DIBR
 MODEL = dict(
     # synthetically trained model

@@ -19,7 +19,11 @@ from detectron2.layers import paste_masks_in_image
 from fvcore.nn import smooth_l1_loss
 
 from core.utils.camera_geometry import get_K_crop_resize
-from core.utils.data_utils import xyz_to_region_batch, denormalize_image, compute_vf_torch
+from core.utils.data_utils import (
+    xyz_to_region_batch,
+    denormalize_image,
+    compute_vf_torch,
+)
 from core.utils.utils import get_emb_show
 from core.utils.edge_utils import compute_mask_edge_weights
 from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT, LM_13_OBJECTS
@@ -68,7 +72,7 @@ def compute_self_loss(
     tb_writer=None,
     iteration=None,
 ):
-    if loss_mode == 'geo':
+    if loss_mode == "geo":
         return compute_self_loss_geo(
             cfg=cfg,
             batch=batch,
@@ -87,7 +91,7 @@ def compute_self_loss(
             tb_writer=tb_writer,
             iteration=iteration,
         )
-    elif loss_mode == 'pose':
+    elif loss_mode == "pose":
         return compute_self_loss_pose(
             cfg=cfg,
             batch=batch,
@@ -153,17 +157,22 @@ def compute_self_loss_geo(
         vis_data["gt/roi_image"] = rearrange(roi_gt_img_vis, "c h w -> h w c")
 
     # do same augmentations for pseudo labels
-    batch = _apply_augmentation_for_geo_batch(geo_batch={
-        k: v for k, v in batch.items() if "pseudo_" in k
-    }, augmenters=batch["stu_augmenter"])
+    batch = _apply_augmentation_for_geo_batch(
+        geo_batch={k: v for k, v in batch.items() if "pseudo_" in k},
+        augmenters=batch["stu_augmenter"],
+    )
 
     # visible mask
-    pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
+    pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(
+        torch.float32
+    )  # 64x64 roi level
 
     # full mask
-    pseudo_full_mask = (batch["pseudo_full_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
+    pseudo_full_mask = (batch["pseudo_full_mask_prob"] > 0.5).to(
+        torch.float32
+    )  # 64x64 roi level
 
-    '''
+    """
     # mask_weight_in_im was only used for mask loss ren<->pred, not for the mask loss btw teacher<->pred
     pseudo_mask_cal_ml = (
         pseudo_vis_mask_in_im if cfg.MODEL.POSE_NET.SELF_LOSS_CFG.MASK_TYPE is "vis" else pseudo_full_mask_in_im
@@ -180,7 +189,7 @@ def compute_self_loss_geo(
         )
     else:  # none (default)
         mask_weight_in_im = torch.ones_like(pseudo_mask_cal_ml[:, None, :, :])
-    '''
+    """
 
     if tb_writer is not None:
         pseudo_vis_mask_vis = pseudo_vis_mask[vis_i].detach().cpu().numpy()
@@ -190,38 +199,68 @@ def compute_self_loss_geo(
         vis_data["pseudo/full_mask_roi"] = pseudo_full_mask_vis[0]
 
         pred_vis_mask_prob_vis = pred_vis_mask_prob[vis_i].detach().cpu().numpy()
-        vis_data["pred/vis_mask_roi"] = (pred_vis_mask_prob_vis > 0.5)[0].astype("float32")
+        vis_data["pred/vis_mask_roi"] = (pred_vis_mask_prob_vis > 0.5)[0].astype(
+            "float32"
+        )
 
         pred_full_mask_prob_vis = pred_full_mask_prob[vis_i].detach().cpu().numpy()
-        vis_data["pred/full_mask_roi"] = (pred_full_mask_prob_vis > 0.5)[0].astype("float32")
+        vis_data["pred/full_mask_roi"] = (pred_full_mask_prob_vis > 0.5)[0].astype(
+            "float32"
+        )
 
     # region mask loss (init pred) -----------------------
     if self_loss_cfg.MASK_INIT_PRED_LW > 0:
         if "vis" in self_loss_cfg.MASK_INIT_PRED_TYPE:
             loss_vis_mask_init_pred = weighted_ex_loss_probs(
-                pred_vis_mask_prob, pseudo_vis_mask, weight=torch.ones_like(pseudo_vis_mask)
+                pred_vis_mask_prob,
+                pseudo_vis_mask,
+                weight=torch.ones_like(pseudo_vis_mask),
             )
-            loss_dict["loss_vis_mask_init_pred"] = self_loss_cfg.MASK_INIT_PRED_LW * loss_vis_mask_init_pred
+            loss_dict["loss_vis_mask_init_pred"] = (
+                self_loss_cfg.MASK_INIT_PRED_LW * loss_vis_mask_init_pred
+            )
 
         if "full" in self_loss_cfg.MASK_INIT_PRED_TYPE:
             loss_full_mask_init_pred = weighted_ex_loss_probs(
-                pred_full_mask_prob, pseudo_full_mask, weight=torch.ones_like(pseudo_full_mask)
+                pred_full_mask_prob,
+                pseudo_full_mask,
+                weight=torch.ones_like(pseudo_full_mask),
             )
-            loss_dict["loss_full_mask_init_pred"] = self_loss_cfg.MASK_INIT_PRED_LW * loss_full_mask_init_pred
+            loss_dict["loss_full_mask_init_pred"] = (
+                self_loss_cfg.MASK_INIT_PRED_LW * loss_full_mask_init_pred
+            )
     # endregion
 
     # region xyz teacher<->pred loss ---------------------------------
     if self_loss_cfg.XYZ_INIT_PRED_LW > 0:
         if self_loss_cfg.XYZ_INIT_PRED_LOSS_TYPE is "smoothL1":
-            loss_init_pred_x = smooth_l1_loss(
-                pred_coor_x * pseudo_vis_mask, batch["pseudo_coor_x"] * pseudo_vis_mask, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask.sum())
-            loss_init_pred_y = smooth_l1_loss(
-                pred_coor_y * pseudo_vis_mask, batch["pseudo_coor_y"] * pseudo_vis_mask, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask.sum())
-            loss_init_pred_z = smooth_l1_loss(
-                pred_coor_z * pseudo_vis_mask, batch["pseudo_coor_z"] * pseudo_vis_mask, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask.sum())
+            loss_init_pred_x = (
+                smooth_l1_loss(
+                    pred_coor_x * pseudo_vis_mask,
+                    batch["pseudo_coor_x"] * pseudo_vis_mask,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask.sum())
+            )
+            loss_init_pred_y = (
+                smooth_l1_loss(
+                    pred_coor_y * pseudo_vis_mask,
+                    batch["pseudo_coor_y"] * pseudo_vis_mask,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask.sum())
+            )
+            loss_init_pred_z = (
+                smooth_l1_loss(
+                    pred_coor_z * pseudo_vis_mask,
+                    batch["pseudo_coor_z"] * pseudo_vis_mask,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask.sum())
+            )
         elif self_loss_cfg.XYZ_INIT_PRED_LOSS_TYPE is "L1":
             loss_init_pred_x = nn.L1Loss(reduction="mean")(
                 pred_coor_x * pseudo_vis_mask, batch["pseudo_coor_x"] * pseudo_vis_mask
@@ -235,9 +274,15 @@ def compute_self_loss_geo(
         else:
             raise ValueError("Unknow xyz init_pred loss type")
 
-        loss_dict["loss_init_pred_x"] = loss_init_pred_x * self_loss_cfg.XYZ_INIT_PRED_LW
-        loss_dict["loss_init_pred_y"] = loss_init_pred_y * self_loss_cfg.XYZ_INIT_PRED_LW
-        loss_dict["loss_init_pred_z"] = loss_init_pred_z * self_loss_cfg.XYZ_INIT_PRED_LW
+        loss_dict["loss_init_pred_x"] = (
+            loss_init_pred_x * self_loss_cfg.XYZ_INIT_PRED_LW
+        )
+        loss_dict["loss_init_pred_y"] = (
+            loss_init_pred_y * self_loss_cfg.XYZ_INIT_PRED_LW
+        )
+        loss_dict["loss_init_pred_z"] = (
+            loss_init_pred_z * self_loss_cfg.XYZ_INIT_PRED_LW
+        )
     # endregion
 
     # region region teacher<->pred loss -------------------------------
@@ -245,7 +290,9 @@ def compute_self_loss_geo(
         loss_region_init_pred = nn.L1Loss(reduction="mean")(
             pred_region * pseudo_vis_mask, batch["pseudo_region"] * pseudo_vis_mask
         )
-        loss_dict["loss_region_init_pred"] = loss_region_init_pred * self_loss_cfg.REGION_INIT_PRED_LW
+        loss_dict["loss_region_init_pred"] = (
+            loss_region_init_pred * self_loss_cfg.REGION_INIT_PRED_LW
+        )
     # endregion
 
     # region vf teacher<->pred loss -------------------------------
@@ -254,18 +301,26 @@ def compute_self_loss_geo(
         loss_dict["loss_init_pred_vf_vis"] = vf_loss_vis * self_loss_cfg.VIS_VF_LW
 
     if self_loss_cfg.FULL_VF_LW > 0:
-        vf_loss_full = vf_loss_func(batch["pseudo_full_vf"], pred_full_vf, pseudo_full_mask)
+        vf_loss_full = vf_loss_func(
+            batch["pseudo_full_vf"], pred_full_vf, pseudo_full_mask
+        )
         loss_dict["loss_init_pred_vf_full"] = vf_loss_full * self_loss_cfg.FULL_VF_LW
     # endregion
 
     # region norm teacher<->pred loss -------------------------------
     if self_loss_cfg.VIS_NORM_LW > 0:
-        norm_loss_vis = norm_loss_func(batch["pseudo_vis_norm"], pred_vis_norm, pseudo_vis_mask)
+        norm_loss_vis = norm_loss_func(
+            batch["pseudo_vis_norm"], pred_vis_norm, pseudo_vis_mask
+        )
         loss_dict["loss_init_pred_norm_vis"] = norm_loss_vis * self_loss_cfg.VIS_NORM_LW
 
     if self_loss_cfg.FULL_NORM_LW > 0:
-        norm_loss_full = norm_loss_func(batch["pseudo_full_norm"], pred_full_norm, pseudo_full_mask)
-        loss_dict["loss_init_pred_norm_full"] = norm_loss_full * self_loss_cfg.FULL_NORM_LW
+        norm_loss_full = norm_loss_func(
+            batch["pseudo_full_norm"], pred_full_norm, pseudo_full_mask
+        )
+        loss_dict["loss_init_pred_norm_full"] = (
+            norm_loss_full * self_loss_cfg.FULL_NORM_LW
+        )
     # endregion
 
     # grid_show and write to tensorboard -----------------------------------------------------
@@ -284,15 +339,17 @@ def compute_self_loss_geo(
 
 def _apply_augmentation_for_geo_batch(geo_batch: dict, augmenters: List[iaa.Augmenter]):
     vf_tensor_names = {
-        'pseudo_vis_vf',
-        'pseudo_full_vf',
+        "pseudo_vis_vf",
+        "pseudo_full_vf",
     }  # vf tensors should be treated differently because of their 5-dim shapes
     b = len(augmenters)
     tensor_obj: torch.Tensor
     for name, tensor_obj in geo_batch.items():
-        assert tensor_obj.shape[0] == b, \
-            "Shape of tensors should be the same as the length of augmenters, but got {} => {}".\
-                format(name, tensor_obj.shape)
+        assert (
+            tensor_obj.shape[0] == b
+        ), "Shape of tensors should be the same as the length of augmenters, but got {} => {}".format(
+            name, tensor_obj.shape
+        )
 
         device = tensor_obj.device
         tensor_obj_aug = []
@@ -301,14 +358,20 @@ def _apply_augmentation_for_geo_batch(geo_batch: dict, augmenters: List[iaa.Augm
             for i, t in enumerate(tensor_obj):
                 t_np = t.view(-1, w, h).permute(1, 2, 0).cpu().numpy()
                 t_np_aug = augmenters[i](image=t_np)
-                tensor_obj_aug.append(torch.tensor(t_np_aug.transpose(2, 0, 1).reshape(c, -1, w, h), device=device))
+                tensor_obj_aug.append(
+                    torch.tensor(
+                        t_np_aug.transpose(2, 0, 1).reshape(c, -1, w, h), device=device
+                    )
+                )
             geo_batch[name] = torch.stack(tensor_obj_aug)
         else:
             _, c, w, h = tensor_obj.shape
             for i, t in enumerate(tensor_obj):
                 t_np = t.permute(1, 2, 0).cpu().numpy()
                 t_np_aug = augmenters[i](image=t_np)
-                tensor_obj_aug.append(torch.tensor(t_np_aug.transpose(2, 0, 1), device=device))
+                tensor_obj_aug.append(
+                    torch.tensor(t_np_aug.transpose(2, 0, 1), device=device)
+                )
             geo_batch[name] = torch.stack(tensor_obj_aug)
     return geo_batch
 
@@ -351,7 +414,9 @@ def compute_self_loss_pose(
     im_H, im_W = batch["gt_img"].shape[-2:]
     batch["K_renderer"] = batch["roi_cam"].clone()
     if cfg.RENDERER.DIFF_RENDERER == "DIBR":
-        batch["K_renderer"][:, 1, 2] += cfg.RENDERER.DIBR.V_OFFSET  # HACK: DIBR renderer has some v offset bug!!
+        batch["K_renderer"][
+            :, 1, 2
+        ] += cfg.RENDERER.DIBR.V_OFFSET  # HACK: DIBR renderer has some v offset bug!!
 
     # get rendered mask/rgb/depth/xyz using DIBR
     cur_models = [ren_models[int(_l)] for _l in batch["roi_cls"]]
@@ -360,13 +425,18 @@ def compute_self_loss_pose(
         ren_func = {
             "batch": partial(ren.render_batch, antialias=True),
             "batch_single": partial(ren.render_batch_single, antialias=True),
-            "batch_tex": partial(ren.render_batch_tex, max_mip_level=9, uv_type="vertex"),
-            "batch_single_tex": partial(ren.render_batch_single_tex, max_mip_level=9, uv_type="vertex"),
+            "batch_tex": partial(
+                ren.render_batch_tex, max_mip_level=9, uv_type="vertex"
+            ),
+            "batch_single_tex": partial(
+                ren.render_batch_single_tex, max_mip_level=9, uv_type="vertex"
+            ),
         }[cfg.RENDERER.RENDER_TYPE]
     elif cfg.RENDERER.DIFF_RENDERER in ["new_DIBR", "dibr"]:
-        ren_func = {"batch": partial(ren.render_batch), "batch_tex": partial(ren.render_batch_tex, uv_type="face")}[
-            cfg.RENDERER.RENDER_TYPE
-        ]
+        ren_func = {
+            "batch": partial(ren.render_batch),
+            "batch_tex": partial(ren.render_batch_tex, uv_type="face"),
+        }[cfg.RENDERER.RENDER_TYPE]
     else:
         raise ValueError("Unknown differentiable renderer type")
     # endregion
@@ -381,7 +451,9 @@ def compute_self_loss_pose(
         height=im_H,
         mode=["color", "depth", "mask", "norm", "prob"],
     )
-    ren_img = rearrange(ren_ret["color"][..., [2, 1, 0]], "b h w c -> b c h w")  # bgr;[0,1]
+    ren_img = rearrange(
+        ren_ret["color"][..., [2, 1, 0]], "b h w c -> b c h w"
+    )  # bgr;[0,1]
     ren_mask = rearrange(ren_ret["mask"].to(torch.float32), "b h w -> b 1 h w")
     # ren_norm = rearrange(ren_ret["norm"], "b h w c -> b c h w")
     # ren_norm_roi = batch_crop_resize(ren_norm, batch["inst_rois"], out_H=in_res, out_W=in_res)
@@ -395,25 +467,41 @@ def compute_self_loss_pose(
     # endregion
 
     # region make pseudo mask labels
-    pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
-    pseudo_vis_mask_in_im = (batch["pseudo_vis_mask_prob_in_im"] > 0.5).to(torch.float32)  # BHW
+    pseudo_vis_mask = (batch["pseudo_vis_mask_prob"] > 0.5).to(
+        torch.float32
+    )  # 64x64 roi level
+    pseudo_vis_mask_in_im = (batch["pseudo_vis_mask_prob_in_im"] > 0.5).to(
+        torch.float32
+    )  # BHW
 
-    pseudo_full_mask = (batch["pseudo_full_mask_prob"] > 0.5).to(torch.float32)  # 64x64 roi level
-    pseudo_full_mask_in_im = (batch["pseudo_full_mask_prob_in_im"] > 0.5).to(torch.float32)  # BHW
+    pseudo_full_mask = (batch["pseudo_full_mask_prob"] > 0.5).to(
+        torch.float32
+    )  # 64x64 roi level
+    pseudo_full_mask_in_im = (batch["pseudo_full_mask_prob_in_im"] > 0.5).to(
+        torch.float32
+    )  # BHW
 
     pseudo_mask_cal_ml = (
-        pseudo_vis_mask_in_im if cfg.MODEL.POSE_NET.SELF_LOSS_CFG.MASK_TYPE is "vis" else pseudo_full_mask_in_im
+        pseudo_vis_mask_in_im
+        if cfg.MODEL.POSE_NET.SELF_LOSS_CFG.MASK_TYPE is "vis"
+        else pseudo_full_mask_in_im
     )
     # endregion
 
     # region compute edge weight (default lower edge weights because edge is not very accurate)
     if self_loss_cfg.MASK_WEIGHT_TYPE == "edge_lower":
         mask_weight_in_im = compute_mask_edge_weights(
-            pseudo_mask_cal_ml[:, None, :, :], dilate_kernel_size=11, erode_kernel_size=11, edge_lower=True
+            pseudo_mask_cal_ml[:, None, :, :],
+            dilate_kernel_size=11,
+            erode_kernel_size=11,
+            edge_lower=True,
         )
     elif self_loss_cfg.MASK_WEIGHT_TYPE == "edge_higher":
         mask_weight_in_im = compute_mask_edge_weights(
-            pseudo_mask_cal_ml[:, None, :, :], dilate_kernel_size=11, erode_kernel_size=11, edge_lower=False
+            pseudo_mask_cal_ml[:, None, :, :],
+            dilate_kernel_size=11,
+            erode_kernel_size=11,
+            edge_lower=False,
         )
     else:  # none (default)
         mask_weight_in_im = torch.ones_like(pseudo_mask_cal_ml[:, None, :, :])
@@ -450,12 +538,17 @@ def compute_self_loss_pose(
     if self_loss_cfg.MASK_INIT_REN_LW > 0:
         if tb_writer is not None:
             ren_prob_roi = batch_crop_resize(
-                ren_prob, batch["inst_rois"], out_H=pseudo_vis_mask.shape[-2], out_W=pseudo_vis_mask.shape[-1]
+                ren_prob,
+                batch["inst_rois"],
+                out_H=pseudo_vis_mask.shape[-2],
+                out_W=pseudo_vis_mask.shape[-1],
             )
             ren_prob_roi_vis = ren_prob_roi[vis_i].detach().cpu().numpy()
             vis_data["ren/prob_roi"] = ren_prob_roi_vis[0]
 
-            mask_diff_pseudo_ren_vis = heatmap(pseudo_vis_mask_vis[0] - ren_prob_roi_vis[0], to_rgb=True)
+            mask_diff_pseudo_ren_vis = heatmap(
+                pseudo_vis_mask_vis[0] - ren_prob_roi_vis[0], to_rgb=True
+            )
             vis_data["diff/mask_pseudo_ren"] = mask_diff_pseudo_ren_vis
 
         if self_loss_cfg.MASK_INIT_REN_LOSS_TYPE == "RW_BCE":
@@ -463,31 +556,47 @@ def compute_self_loss_pose(
                 ren_prob, pseudo_mask_cal_ml[:, None, :, :], weight=mask_weight_in_im
             )
         elif self_loss_cfg.MASK_INIT_REN_LOSS_TYPE == "dice":
-            loss_mask_init_ren = soft_dice_loss(ren_prob, pseudo_mask_cal_ml[:, None, :, :], eps=0.002)
+            loss_mask_init_ren = soft_dice_loss(
+                ren_prob, pseudo_mask_cal_ml[:, None, :, :], eps=0.002
+            )
         else:
             raise NotImplementedError(
-                "Not supported MASK_INIT_REN_LOSS_TYPE: {}".format(self_loss_cfg.MASK_INIT_REN_LOSS_TYPE)
+                "Not supported MASK_INIT_REN_LOSS_TYPE: {}".format(
+                    self_loss_cfg.MASK_INIT_REN_LOSS_TYPE
+                )
             )
-        loss_dict["loss_mask_init_ren"] = self_loss_cfg.MASK_INIT_REN_LW * loss_mask_init_ren
+        loss_dict["loss_mask_init_ren"] = (
+            self_loss_cfg.MASK_INIT_REN_LW * loss_mask_init_ren
+        )
     # endregion
 
     if tb_writer is not None:
         pred_vis_mask_prob_vis = pred_vis_mask_prob[vis_i].detach().cpu().numpy()
         vis_data["pred/vis_mask_prob_roi"] = pred_vis_mask_prob_vis[0]
-        vis_data["pred/vis_mask_roi"] = (pred_vis_mask_prob_vis > 0.5)[0].astype("float32")
+        vis_data["pred/vis_mask_roi"] = (pred_vis_mask_prob_vis > 0.5)[0].astype(
+            "float32"
+        )
 
     # region mask loss (init pred) -----------------------
     if self_loss_cfg.MASK_INIT_PRED_LW > 0:
         if "vis" in self_loss_cfg.MASK_INIT_PRED_TYPE:
             loss_vis_mask_init_pred = weighted_ex_loss_probs(
-                pred_vis_mask_prob, pseudo_vis_mask, weight=torch.ones_like(pseudo_vis_mask)
+                pred_vis_mask_prob,
+                pseudo_vis_mask,
+                weight=torch.ones_like(pseudo_vis_mask),
             )
-            loss_dict["loss_vis_mask_init_pred"] = self_loss_cfg.MASK_INIT_PRED_LW * loss_vis_mask_init_pred
+            loss_dict["loss_vis_mask_init_pred"] = (
+                self_loss_cfg.MASK_INIT_PRED_LW * loss_vis_mask_init_pred
+            )
         if "full" in self_loss_cfg.MASK_INIT_PRED_TYPE:
             loss_full_mask_init_pred = weighted_ex_loss_probs(
-                pred_full_mask_prob, pseudo_full_mask, weight=torch.ones_like(pseudo_full_mask)
+                pred_full_mask_prob,
+                pseudo_full_mask,
+                weight=torch.ones_like(pseudo_full_mask),
             )
-            loss_dict["loss_full_mask_init_pred"] = self_loss_cfg.MASK_INIT_PRED_LW * loss_full_mask_init_pred
+            loss_dict["loss_full_mask_init_pred"] = (
+                self_loss_cfg.MASK_INIT_PRED_LW * loss_full_mask_init_pred
+            )
     # endregion
 
     # region vf teacher<->pred loss -------------------------------
@@ -496,7 +605,9 @@ def compute_self_loss_pose(
         loss_dict["loss_init_pred_vf_vis"] = vf_loss_vis * self_loss_cfg.VIS_VF_LW
 
     if self_loss_cfg.FULL_VF_LW > 0:
-        vf_loss_full = vf_loss_func(batch["pseudo_full_vf"], pred_full_vf, pseudo_full_mask)
+        vf_loss_full = vf_loss_func(
+            batch["pseudo_full_vf"], pred_full_vf, pseudo_full_mask
+        )
         loss_dict["loss_init_pred_vf_full"] = vf_loss_full * self_loss_cfg.FULL_VF_LW
     # endregion
 
@@ -504,27 +615,35 @@ def compute_self_loss_pose(
     if self_loss_cfg.VIS_RT_VF_LW > 0:
         vf_from_teacher_rt_vis = compute_vf_torch(
             pseudo_vis_mask.unsqueeze(1),  # b*1*1*w*h
-            batch['vf_fps_points'],  # b*f*3
+            batch["vf_fps_points"],  # b*f*3
             batch["K_renderer"],  # b*3*3
             batch["pseudo_rot"],  # b*3*3
             batch["pseudo_trans"],  # b*3
             batch["roi_center"],  # b*2
             batch["roi_scale"].unsqueeze(1),  # b*1
         )
-        vf_loss_pseudo_rt_vis = vf_loss_func(vf_from_teacher_rt_vis, pred_vis_vf, pseudo_vis_mask)
-        loss_dict["loss_pseudo_rt_vf_vis"] = vf_loss_pseudo_rt_vis * self_loss_cfg.VIS_RT_VF_LW
+        vf_loss_pseudo_rt_vis = vf_loss_func(
+            vf_from_teacher_rt_vis, pred_vis_vf, pseudo_vis_mask
+        )
+        loss_dict["loss_pseudo_rt_vf_vis"] = (
+            vf_loss_pseudo_rt_vis * self_loss_cfg.VIS_RT_VF_LW
+        )
     if self_loss_cfg.FULL_RT_VF_LW > 0:
         vf_from_teacher_rt_full = compute_vf_torch(
             pseudo_full_mask.unsqueeze(1),  # b*1*1*w*h
-            batch['vf_fps_points'],  # b*f*3
+            batch["vf_fps_points"],  # b*f*3
             batch["K_renderer"],  # b*3*3
             batch["pseudo_rot"],  # b*3*3
             batch["pseudo_trans"],  # b*3
             batch["roi_center"],  # b*2
             batch["roi_scale"].unsqueeze(1),  # b*1
         )
-        vf_loss_pseudo_rt_full = vf_loss_func(vf_from_teacher_rt_full, pred_full_vf, pseudo_full_mask)
-        loss_dict["loss_pseudo_rt_vf_full"] = vf_loss_pseudo_rt_full * self_loss_cfg.FULL_RT_VF_LW
+        vf_loss_pseudo_rt_full = vf_loss_func(
+            vf_from_teacher_rt_full, pred_full_vf, pseudo_full_mask
+        )
+        loss_dict["loss_pseudo_rt_vf_full"] = (
+            vf_loss_pseudo_rt_full * self_loss_cfg.FULL_RT_VF_LW
+        )
     # endregion
 
     if tb_writer is not None:
@@ -535,12 +654,18 @@ def compute_self_loss_pose(
 
     # region norm teacher<->pred loss -------------------------------
     if self_loss_cfg.VIS_NORM_LW > 0:
-        norm_loss_vis = norm_loss_func(batch["pseudo_vis_norm"], pred_vis_norm, pseudo_vis_mask)
+        norm_loss_vis = norm_loss_func(
+            batch["pseudo_vis_norm"], pred_vis_norm, pseudo_vis_mask
+        )
         loss_dict["loss_init_pred_norm_vis"] = norm_loss_vis * self_loss_cfg.VIS_NORM_LW
 
     if self_loss_cfg.FULL_NORM_LW > 0:
-        norm_loss_full = norm_loss_func(batch["pseudo_full_norm"], pred_full_norm, pseudo_full_mask)
-        loss_dict["loss_init_pred_norm_full"] = norm_loss_full * self_loss_cfg.FULL_NORM_LW
+        norm_loss_full = norm_loss_func(
+            batch["pseudo_full_norm"], pred_full_norm, pseudo_full_mask
+        )
+        loss_dict["loss_init_pred_norm_full"] = (
+            norm_loss_full * self_loss_cfg.FULL_NORM_LW
+        )
     # endregion
 
     # region prepare for color loss ----------------------
@@ -551,33 +676,57 @@ def compute_self_loss_pose(
         or self_loss_cfg.GEOM_LW > 0
     ):
         # crop/resize real and ren
-        ren_img_roi = batch_crop_resize(ren_img, batch["inst_rois"], out_H=in_res, out_W=in_res)
+        ren_img_roi = batch_crop_resize(
+            ren_img, batch["inst_rois"], out_H=in_res, out_W=in_res
+        )
         # ren_mask_roi = batch_crop_resize(ren_mask, batch["inst_rois"], out_H=256, out_W=256)
         gt_img_roi = batch["roi_gt_img"]
         # NOTE: use only visib parts to compute color loss
-        pseudo_vis_mask_roi = F.interpolate(pseudo_vis_mask, size=(in_res, in_res), mode="nearest")
+        pseudo_vis_mask_roi = F.interpolate(
+            pseudo_vis_mask, size=(in_res, in_res), mode="nearest"
+        )
         if tb_writer is not None:
             roi_gt_img_vis = batch["roi_gt_img"][vis_i].cpu().numpy()
-            roi_gt_img_vis = denormalize_image(roi_gt_img_vis, cfg)[::-1].astype("uint8")
+            roi_gt_img_vis = denormalize_image(roi_gt_img_vis, cfg)[::-1].astype(
+                "uint8"
+            )
             vis_data["gt/roi_image"] = rearrange(roi_gt_img_vis, "c h w -> h w c")
 
-            gt_img_roi_masked_vis = (gt_img_roi[vis_i] * pseudo_vis_mask_roi[vis_i]).cpu().numpy()
-            gt_img_roi_masked_vis = denormalize_image(gt_img_roi_masked_vis, cfg)[::-1].astype("uint8")
-            vis_data["gt/img_roi_masked"] = rearrange(gt_img_roi_masked_vis, "c h w -> h w c")
+            gt_img_roi_masked_vis = (
+                (gt_img_roi[vis_i] * pseudo_vis_mask_roi[vis_i]).cpu().numpy()
+            )
+            gt_img_roi_masked_vis = denormalize_image(gt_img_roi_masked_vis, cfg)[
+                ::-1
+            ].astype("uint8")
+            vis_data["gt/img_roi_masked"] = rearrange(
+                gt_img_roi_masked_vis, "c h w -> h w c"
+            )
 
             ren_img_roi_vis = ren_img_roi[vis_i].detach().cpu().numpy()
-            ren_img_roi_vis = denormalize_image(ren_img_roi_vis, cfg)[::-1].astype("uint8")
+            ren_img_roi_vis = denormalize_image(ren_img_roi_vis, cfg)[::-1].astype(
+                "uint8"
+            )
             vis_data["ren/img_roi"] = rearrange(ren_img_roi_vis, "c h w -> h w c")
 
-            gt_ren_img_roi_vis = (0.5 * gt_img_roi[vis_i] + 0.5 * ren_img_roi[vis_i].detach()).cpu().numpy()
-            gt_ren_img_roi_vis = denormalize_image(gt_ren_img_roi_vis, cfg)[::-1].astype("uint8")
-            vis_data["diff/gt_ren_img_roi"] = rearrange(gt_ren_img_roi_vis, "c h w -> h w c")
+            gt_ren_img_roi_vis = (
+                (0.5 * gt_img_roi[vis_i] + 0.5 * ren_img_roi[vis_i].detach())
+                .cpu()
+                .numpy()
+            )
+            gt_ren_img_roi_vis = denormalize_image(gt_ren_img_roi_vis, cfg)[
+                ::-1
+            ].astype("uint8")
+            vis_data["diff/gt_ren_img_roi"] = rearrange(
+                gt_ren_img_roi_vis, "c h w -> h w c"
+            )
     # endregion
 
     # region perceptual loss --------------------------------------
     if self_loss_cfg.PERCEPT_LW > 0:
         assert perceptual_func is not None
-        loss_percep_obj = perceptual_func(ren_img_roi, gt_img_roi * pseudo_vis_mask_roi)
+        loss_percep_obj = perceptual_func(
+            ren_img_roi * pseudo_vis_mask_roi, gt_img_roi * pseudo_vis_mask_roi
+        )
         loss_dict["loss_percep_obj"] = loss_percep_obj * self_loss_cfg.PERCEPT_LW
     # endregion
 
@@ -589,14 +738,26 @@ def compute_self_loss_pose(
         lab_ren_img_roi = rgb_to_lab(ren_img_roi[:, [2, 1, 0]].contiguous())
         lab_ren_img_roi = normalize_lab(lab_ren_img_roi)  # [0, 1], NCHW
         if self_loss_cfg.LAB_NO_L:
-            loss_color_l1_obj = smooth_l1_loss(
-                lab_gt_img_roi[:, 1:, :, :] * pseudo_vis_mask_roi, lab_ren_img_roi[:, 1:, :, :], beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask_roi.sum())
+            loss_color_l1_obj = (
+                smooth_l1_loss(
+                    lab_gt_img_roi[:, 1:, :, :] * pseudo_vis_mask_roi,
+                    lab_ren_img_roi[:, 1:, :, :] * pseudo_vis_mask_roi,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask_roi.sum())
+            )
             loss_tag = "loss_color_ab_obj"
         else:
-            loss_color_l1_obj = smooth_l1_loss(
-                lab_gt_img_roi * pseudo_vis_mask_roi, lab_ren_img_roi, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask_roi.sum())
+            loss_color_l1_obj = (
+                smooth_l1_loss(
+                    lab_gt_img_roi * pseudo_vis_mask_roi,
+                    lab_ren_img_roi * pseudo_vis_mask_roi,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask_roi.sum())
+            )
             loss_tag = "loss_color_lab_obj"
         loss_dict[loss_tag] = self_loss_cfg.LAB_LW * loss_color_l1_obj
     # endregion
@@ -604,7 +765,12 @@ def compute_self_loss_pose(
     # region ms ssim loss ---------------------------------------------
     if self_loss_cfg.MS_SSIM_LW > 0:
         assert ms_ssim_func is not None
-        loss_ms_ssim_obj = (1 - ms_ssim_func(gt_img_roi * pseudo_vis_mask_roi, ren_img_roi)).mean()
+        loss_ms_ssim_obj = (
+            1
+            - ms_ssim_func(
+                gt_img_roi * pseudo_vis_mask_roi, ren_img_roi * pseudo_vis_mask_roi
+            )
+        ).mean()
         loss_dict["loss_ms_ssim"] = loss_ms_ssim_obj * self_loss_cfg.MS_SSIM_LW
     # endregion
 
@@ -638,7 +804,9 @@ def compute_self_loss_pose(
             if self_loss_cfg.CHAMFER_CENTER_LW > 0:
                 loss_dict["loss_chamfer_center"] = loss_chamfer_center
         else:
-            raise NotImplementedError("Unknown geom loss type: {}".format(self_loss_cfg.GEOM_LOSS_TYPE))
+            raise NotImplementedError(
+                "Unknown geom loss type: {}".format(self_loss_cfg.GEOM_LOSS_TYPE)
+            )
 
         if tb_writer is not None:
             pseudo_mask_in_im_vis = pseudo_vis_mask_in_im[vis_i].detach().cpu().numpy()
@@ -666,15 +834,33 @@ def compute_self_loss_pose(
     # region xyz init pred loss ---------------------------------
     if self_loss_cfg.XYZ_INIT_PRED_LW > 0:
         if self_loss_cfg.XYZ_INIT_PRED_LOSS_TYPE is "smoothL1":
-            loss_init_pred_x = smooth_l1_loss(
-                pred_coor_x * pseudo_vis_mask, batch["pseudo_coor_x"] * pseudo_vis_mask, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask.sum())
-            loss_init_pred_y = smooth_l1_loss(
-                pred_coor_y * pseudo_vis_mask, batch["pseudo_coor_y"] * pseudo_vis_mask, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask.sum())
-            loss_init_pred_z = smooth_l1_loss(
-                pred_coor_z * pseudo_vis_mask, batch["pseudo_coor_z"] * pseudo_vis_mask, beta=0, reduction="sum"
-            ) / max(1, pseudo_vis_mask.sum())
+            loss_init_pred_x = (
+                smooth_l1_loss(
+                    pred_coor_x * pseudo_vis_mask,
+                    batch["pseudo_coor_x"] * pseudo_vis_mask,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask.sum())
+            )
+            loss_init_pred_y = (
+                smooth_l1_loss(
+                    pred_coor_y * pseudo_vis_mask,
+                    batch["pseudo_coor_y"] * pseudo_vis_mask,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask.sum())
+            )
+            loss_init_pred_z = (
+                smooth_l1_loss(
+                    pred_coor_z * pseudo_vis_mask,
+                    batch["pseudo_coor_z"] * pseudo_vis_mask,
+                    beta=0,
+                    reduction="sum",
+                )
+                / max(1, pseudo_vis_mask.sum())
+            )
         elif self_loss_cfg.XYZ_INIT_PRED_LOSS_TYPE is "L1":
             loss_init_pred_x = nn.L1Loss(reduction="mean")(
                 pred_coor_x * pseudo_vis_mask, batch["pseudo_coor_x"] * pseudo_vis_mask
@@ -688,9 +874,15 @@ def compute_self_loss_pose(
         else:
             raise ValueError("Unknow xyz init_pred loss type")
 
-        loss_dict["loss_init_pred_x"] = loss_init_pred_x * self_loss_cfg.XYZ_INIT_PRED_LW
-        loss_dict["loss_init_pred_y"] = loss_init_pred_y * self_loss_cfg.XYZ_INIT_PRED_LW
-        loss_dict["loss_init_pred_z"] = loss_init_pred_z * self_loss_cfg.XYZ_INIT_PRED_LW
+        loss_dict["loss_init_pred_x"] = (
+            loss_init_pred_x * self_loss_cfg.XYZ_INIT_PRED_LW
+        )
+        loss_dict["loss_init_pred_y"] = (
+            loss_init_pred_y * self_loss_cfg.XYZ_INIT_PRED_LW
+        )
+        loss_dict["loss_init_pred_z"] = (
+            loss_init_pred_z * self_loss_cfg.XYZ_INIT_PRED_LW
+        )
     # endregion
 
     # region region-loss -------------------------------
@@ -698,7 +890,9 @@ def compute_self_loss_pose(
         loss_region_init_pred = nn.L1Loss(reduction="mean")(
             pred_region * pseudo_vis_mask, batch["pseudo_region"] * pseudo_vis_mask
         )
-        loss_dict["loss_region_init_pred"] = loss_region_init_pred * self_loss_cfg.REGION_INIT_PRED_LW
+        loss_dict["loss_region_init_pred"] = (
+            loss_region_init_pred * self_loss_cfg.REGION_INIT_PRED_LW
+        )
     # endregion
 
     # region pm loss --------------------------------
@@ -731,15 +925,17 @@ def compute_self_loss_pose(
     return loss_dict
 
 
-def batch_data_self(cfg, data, loss_mode, model_teacher=None, device="cuda", phase="train"):
+def batch_data_self(
+    cfg, data, loss_mode, model_teacher=None, device="cuda", phase="train"
+):
     if phase != "train":
         return batch_data_test_self(cfg, data, device=device)
 
     assert model_teacher is not None
     assert not model_teacher.training, "teacher model must be in eval mode!"
-    if loss_mode == 'geo':
+    if loss_mode == "geo":
         return batch_data_self_geo(cfg, data, model_teacher, device)
-    elif loss_mode == 'pose':
+    elif loss_mode == "pose":
         return batch_data_self_pose(cfg, data, model_teacher, device)
     else:
         raise ValueError(loss_mode)
@@ -754,46 +950,66 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     batch = {}
     # the image, infomation data and data from detection
     # augmented roi_image
-    batch["roi_img"] = torch.stack([d["roi_img"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_img"] = torch.stack([d["roi_img"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     # original roi_image
-    batch["roi_gt_img"] = torch.stack([d["roi_gt_img"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_gt_img"] = torch.stack([d["roi_gt_img"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     # original image
     if "gt_img" in data[0]:
-        batch["gt_img"] = torch.stack([d["gt_img"] for d in data], dim=0).to(device, non_blocking=True)
+        batch["gt_img"] = torch.stack([d["gt_img"] for d in data], dim=0).to(
+            device, non_blocking=True
+        )
         im_H, im_W = batch["gt_img"].shape[-2:]
     else:
         im_H, im_W = data[0]["height"], data[0]["width"]
 
     if "depth" in data[0]:
-        batch["depth"] = torch.stack([d["depth"] for d in data], dim=0).to(device, non_blocking=True)
+        batch["depth"] = torch.stack([d["depth"] for d in data], dim=0).to(
+            device, non_blocking=True
+        )
 
-    batch["roi_cls"] = torch.tensor([d["roi_cls"] for d in data], dtype=torch.long).to(device, non_blocking=True)
+    batch["roi_cls"] = torch.tensor([d["roi_cls"] for d in data], dtype=torch.long).to(
+        device, non_blocking=True
+    )
     bs = batch["roi_cls"].shape[0]
     if "roi_coord_2d" in data[0]:
-        batch["roi_coord_2d"] = torch.stack([d["roi_coord_2d"] for d in data], dim=0).to(
-            device=device, non_blocking=True
-        )
+        batch["roi_coord_2d"] = torch.stack(
+            [d["roi_coord_2d"] for d in data], dim=0
+        ).to(device=device, non_blocking=True)
     if "roi_coord_2d_rel" in data[0]:
-        batch["roi_coord_2d_rel"] = torch.stack([d["roi_coord_2d_rel"] for d in data], dim=0).to(
-            device=device, non_blocking=True
-        )
+        batch["roi_coord_2d_rel"] = torch.stack(
+            [d["roi_coord_2d_rel"] for d in data], dim=0
+        ).to(device=device, non_blocking=True)
 
-    batch["roi_cam"] = torch.stack([d["cam"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_cam"] = torch.stack([d["cam"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     batch["roi_center"] = torch.stack([d["bbox_center"] for d in data], dim=0).to(
         device=device, dtype=torch.float32, non_blocking=True
     )
-    batch["roi_scale"] = torch.tensor([d["scale"] for d in data], device=device, dtype=torch.float32)
+    batch["roi_scale"] = torch.tensor(
+        [d["scale"] for d in data], device=device, dtype=torch.float32
+    )
     # for crop and resize
     rois_xy0 = batch["roi_center"] - batch["roi_scale"].view(bs, -1) / 2  # bx2
     rois_xy1 = batch["roi_center"] + batch["roi_scale"].view(bs, -1) / 2  # bx2
-    batch["inst_rois"] = torch.cat([torch.arange(bs, **tensor_kwargs).view(-1, 1), rois_xy0, rois_xy1], dim=1)
+    batch["inst_rois"] = torch.cat(
+        [torch.arange(bs, **tensor_kwargs).view(-1, 1), rois_xy0, rois_xy1], dim=1
+    )
 
     # for depth backprojection in input roi level
     in_res = net_cfg.INPUT_RES
     roi_resize_ratio_batch_in = in_res / batch["roi_scale"].view(bs, -1)
-    batch["roi_zoom_K_in"] = get_K_crop_resize(batch["roi_cam"], rois_xy0, roi_resize_ratio_batch_in)
+    batch["roi_zoom_K_in"] = get_K_crop_resize(
+        batch["roi_cam"], rois_xy0, roi_resize_ratio_batch_in
+    )
 
-    batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     batch["resize_ratio"] = torch.tensor([d["resize_ratio"] for d in data]).to(
         device=device, dtype=torch.float32, non_blocking=True
     )
@@ -808,14 +1024,14 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
             device=device, dtype=torch.float32, non_blocking=True
         )
     if "roi_fps_points" in data[0]:
-        batch["roi_fps_points"] = torch.stack([d["roi_fps_points"] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
-        )
+        batch["roi_fps_points"] = torch.stack(
+            [d["roi_fps_points"] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
 
     if "vf_fps_points" in data[0]:
-        batch["vf_fps_points"] = torch.stack([d["vf_fps_points"] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
-        )
+        batch["vf_fps_points"] = torch.stack(
+            [d["vf_fps_points"] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
     # get pose related pseudo labels from teacher model --------------------------
     with torch.no_grad():
         out_dict = model_teacher(
@@ -827,25 +1043,25 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
             roi_whs=batch["roi_wh"],
             roi_extents=batch.get("roi_extent"),
             resize_ratios=batch["resize_ratio"],
-            forward_mode='pose'
+            forward_mode="pose",
         )
         # rot, trans, mask, coor_x, coor_y, coor_z
 
     pseudo_pose_type = cfg.MODEL.get("PSEUDO_POSE_TYPE", "unknown")
     if pseudo_pose_type == "pose_refine" and "pose_refine" in data[0]:
-        batch["pseudo_rot"] = torch.stack([d["pose_refine"][:3, :3] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
-        )
-        batch["pseudo_trans"] = torch.stack([d["pose_refine"][:3, 3] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
-        )
+        batch["pseudo_rot"] = torch.stack(
+            [d["pose_refine"][:3, :3] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
+        batch["pseudo_trans"] = torch.stack(
+            [d["pose_refine"][:3, 3] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
     elif pseudo_pose_type == "pose_est" and "pose_est" in data[0]:
-        batch["pseudo_rot"] = torch.stack([d["pose_est"][:3, :3] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
-        )
-        batch["pseudo_trans"] = torch.stack([d["pose_est"][:3, 3] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
-        )
+        batch["pseudo_rot"] = torch.stack(
+            [d["pose_est"][:3, :3] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
+        batch["pseudo_trans"] = torch.stack(
+            [d["pose_est"][:3, 3] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
     elif pseudo_pose_type == "pose_init":  # online inferred by teacher
         batch["pseudo_rot"] = out_dict["rot"]
         batch["pseudo_trans"] = out_dict["trans"]
@@ -862,15 +1078,25 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     batch["pseudo_vis_mask_prob"] = vis_mask_prob = out_dict["vis_mask_prob"]
     # set threshold < 0: uint8 [0,255]
     pseudo_vis_mask_prob_in_im = paste_masks_in_image(
-        vis_mask_prob[:, 0, :, :], batch["inst_rois"][:, 1:5], image_shape=(im_H, im_W), threshold=-1
+        vis_mask_prob[:, 0, :, :],
+        batch["inst_rois"][:, 1:5],
+        image_shape=(im_H, im_W),
+        threshold=-1,
     )
-    batch["pseudo_vis_mask_prob_in_im"] = pseudo_vis_mask_prob_in_im.to(torch.float32) / 255
+    batch["pseudo_vis_mask_prob_in_im"] = (
+        pseudo_vis_mask_prob_in_im.to(torch.float32) / 255
+    )
 
     batch["pseudo_full_mask_prob"] = full_mask_prob = out_dict["full_mask_prob"]
     pseudo_full_mask_prob_in_im = paste_masks_in_image(
-        full_mask_prob[:, 0, :, :], batch["inst_rois"][:, 1:5], image_shape=(im_H, im_W), threshold=-1
+        full_mask_prob[:, 0, :, :],
+        batch["inst_rois"][:, 1:5],
+        image_shape=(im_H, im_W),
+        threshold=-1,
     )
-    batch["pseudo_full_mask_prob_in_im"] = pseudo_full_mask_prob_in_im.to(torch.float32) / 255
+    batch["pseudo_full_mask_prob_in_im"] = (
+        pseudo_full_mask_prob_in_im.to(torch.float32) / 255
+    )
 
     batch["pseudo_coor_x"] = coor_x = out_dict["coor_x"]
     batch["pseudo_coor_y"] = coor_y = out_dict["coor_y"]
@@ -894,9 +1120,15 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
 
 def batch_data_self_geo(cfg, data, model_teacher, device):
     batch = {
-        "roi_img": torch.stack([d["roi_img"] for d in data], dim=0).to(device, non_blocking=True),
-        "roi_gt_img": torch.stack([d["roi_gt_img"] for d in data], dim=0).to(device, non_blocking=True),
-        "gt_img": torch.stack([d["gt_img"] for d in data], dim=0).to(device, non_blocking=True),
+        "roi_img": torch.stack([d["roi_img"] for d in data], dim=0).to(
+            device, non_blocking=True
+        ),
+        "roi_gt_img": torch.stack([d["roi_gt_img"] for d in data], dim=0).to(
+            device, non_blocking=True
+        ),
+        "gt_img": torch.stack([d["gt_img"] for d in data], dim=0).to(
+            device, non_blocking=True
+        ),
         "stu_augmenter": [d["geo_augmenter"] for d in data],
     }
     # get pose related pseudo labels from teacher model --------------------------
@@ -915,19 +1147,27 @@ def batch_data_train_online_self(cfg, data, renderer, device="cuda"):
     net_cfg = cfg.MODEL.POSE_NET
     g_head_cfg = net_cfg.GEO_HEAD
     batch = {}
-    batch["roi_img"] = torch.stack([d["roi_img"] for d in data], dim=0).to(device, non_blocking=True)
-    batch["roi_cls"] = torch.tensor([d["roi_cls"] for d in data], dtype=torch.long).to(device, non_blocking=True)
+    batch["roi_img"] = torch.stack([d["roi_img"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
+    batch["roi_cls"] = torch.tensor([d["roi_cls"] for d in data], dtype=torch.long).to(
+        device, non_blocking=True
+    )
     bs = batch["roi_cls"].shape[0]
     if "roi_coord_2d" in data[0]:
-        batch["roi_coord_2d"] = torch.stack([d["roi_coord_2d"] for d in data], dim=0).to(
-            device=device, non_blocking=True
-        )
+        batch["roi_coord_2d"] = torch.stack(
+            [d["roi_coord_2d"] for d in data], dim=0
+        ).to(device=device, non_blocking=True)
 
-    batch["roi_cam"] = torch.stack([d["cam"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_cam"] = torch.stack([d["cam"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     batch["roi_center"] = torch.stack([d["bbox_center"] for d in data], dim=0).to(
         device=device, dtype=torch.float32, non_blocking=True
     )
-    batch["roi_scale"] = torch.tensor([d["scale"] for d in data], device=device, dtype=torch.float32)
+    batch["roi_scale"] = torch.tensor(
+        [d["scale"] for d in data], device=device, dtype=torch.float32
+    )
     batch["resize_ratio"] = torch.tensor(
         [d["resize_ratio"] for d in data], device=device, dtype=torch.float32
     )  # out_res/scale
@@ -935,14 +1175,20 @@ def batch_data_train_online_self(cfg, data, renderer, device="cuda"):
     roi_crop_xy_batch = batch["roi_center"] - batch["roi_scale"].view(bs, -1) / 2
     out_res = net_cfg.OUTPUT_RES
     roi_resize_ratio_batch = out_res / batch["roi_scale"].view(bs, -1)
-    batch["roi_zoom_K"] = get_K_crop_resize(batch["roi_cam"], roi_crop_xy_batch, roi_resize_ratio_batch)
+    batch["roi_zoom_K"] = get_K_crop_resize(
+        batch["roi_cam"], roi_crop_xy_batch, roi_resize_ratio_batch
+    )
     # --------------------------------------------------------------
-    batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_wh"] = torch.stack([d["roi_wh"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     batch["roi_extent"] = torch.stack([d["roi_extent"] for d in data], dim=0).to(
         device=device, dtype=torch.float32, non_blocking=True
     )  # [b,3]
 
-    batch["roi_trans_ratio"] = torch.stack([d["trans_ratio"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_trans_ratio"] = torch.stack([d["trans_ratio"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     # yapf: disable
     for key in [
         "roi_mask_trunc", "roi_mask_visib",
@@ -959,11 +1205,18 @@ def batch_data_train_online_self(cfg, data, renderer, device="cuda"):
         batch["sym_info"] = [d["sym_info"] for d in data]
 
     # rendering online xyz -----------------------------
-    pc_obj_tensor = torch.cuda.FloatTensor(out_res, out_res, 4, device=device).detach()  # xyz
-    roi_xyz_batch = torch.empty(bs, out_res, out_res, 3, dtype=torch.float32, device=device)
+    pc_obj_tensor = torch.cuda.FloatTensor(
+        out_res, out_res, 4, device=device
+    ).detach()  # xyz
+    roi_xyz_batch = torch.empty(
+        bs, out_res, out_res, 3, dtype=torch.float32, device=device
+    )
     for _i in range(bs):
         pose = np.hstack(
-            [batch["ego_rot"][_i].detach().cpu().numpy(), batch["trans"][_i].detach().cpu().numpy().reshape(3, 1)]
+            [
+                batch["ego_rot"][_i].detach().cpu().numpy(),
+                batch["trans"][_i].detach().cpu().numpy().reshape(3, 1),
+            ]
         )
         renderer.render(
             [int(batch["roi_cls"][_i])],
@@ -974,18 +1227,26 @@ def batch_data_train_online_self(cfg, data, renderer, device="cuda"):
         roi_xyz_batch[_i].copy_(pc_obj_tensor[:, :, :3], non_blocking=True)
     # [bs, out_res, out_res]
     batch["roi_mask_obj"] = (
-        (roi_xyz_batch[..., 0] != 0) & (roi_xyz_batch[..., 1] != 0) & (roi_xyz_batch[..., 2] != 0)
+        (roi_xyz_batch[..., 0] != 0)
+        & (roi_xyz_batch[..., 1] != 0)
+        & (roi_xyz_batch[..., 2] != 0)
     ).to(torch.float32)
     batch["roi_mask_trunc"] = batch["roi_mask_trunc"] * batch["roi_mask_obj"]
     batch["roi_mask_visib"] = batch["roi_mask_visib"] * batch["roi_mask_obj"]
 
     if g_head_cfg.NUM_REGIONS > 1:  # get roi_region ------------------------
-        batch["roi_fps_points"] = torch.stack([d["roi_fps_points"] for d in data], dim=0).to(
-            device=device, dtype=torch.float32, non_blocking=True
+        batch["roi_fps_points"] = torch.stack(
+            [d["roi_fps_points"] for d in data], dim=0
+        ).to(device=device, dtype=torch.float32, non_blocking=True)
+        batch["roi_region"] = xyz_to_region_batch(
+            roi_xyz_batch, batch["roi_fps_points"], mask=batch["roi_mask_obj"]
         )
-        batch["roi_region"] = xyz_to_region_batch(roi_xyz_batch, batch["roi_fps_points"], mask=batch["roi_mask_obj"])
     # normalize to [0, 1]
-    batch["roi_xyz"] = rearrange(roi_xyz_batch, "b h w c -> b c h w") / batch["roi_extent"].view(bs, 3, 1, 1) + 0.5
+    batch["roi_xyz"] = (
+        rearrange(roi_xyz_batch, "b h w c -> b c h w")
+        / batch["roi_extent"].view(bs, 3, 1, 1)
+        + 0.5
+    )
 
     # get xyz bin if needed ---------------------------------
     loss_cfg = net_cfg.LOSS_CFG
@@ -993,10 +1254,16 @@ def batch_data_train_online_self(cfg, data, renderer, device="cuda"):
     if ("CE" in xyz_loss_type) or ("cls" in net_cfg.NAME):
         # coordinates: [0, 1] to discrete [0, XYZ_BIN-1]
         roi_xyz_bin_batch = (
-            (batch["roi_xyz"] * (g_head_cfg.XYZ_BIN - 1) + 0.5).clamp(min=0, max=g_head_cfg.XYZ_BIN).to(torch.long)
+            (batch["roi_xyz"] * (g_head_cfg.XYZ_BIN - 1) + 0.5)
+            .clamp(min=0, max=g_head_cfg.XYZ_BIN)
+            .to(torch.long)
         )
         # set bg to XYZ_BIN
-        roi_masks = {"trunc": batch["roi_mask_trunc"], "visib": batch["roi_mask_visib"], "obj": batch["roi_mask_obj"]}
+        roi_masks = {
+            "trunc": batch["roi_mask_trunc"],
+            "visib": batch["roi_mask_visib"],
+            "obj": batch["roi_mask_obj"],
+        }
         roi_mask_xyz = roi_masks[loss_cfg.XYZ_LOSS_MASK_GT]
         for _c in range(roi_xyz_bin_batch.shape[1]):
             roi_xyz_bin_batch[:, _c][roi_mask_xyz == 0] = g_head_cfg.XYZ_BIN
@@ -1025,8 +1292,12 @@ def batch_data_test_self(cfg, data, device="cuda"):
             batch[key] = torch.cat([d[key] for d in data], dim=0).to(device=device, dtype=dtype, non_blocking=True)
     # yapf: enable
 
-    batch["roi_cam"] = torch.cat([d["cam"] for d in data], dim=0).to(device, non_blocking=True)
-    batch["roi_center"] = torch.cat([d["bbox_center"] for d in data], dim=0).to(device, non_blocking=True)
+    batch["roi_cam"] = torch.cat([d["cam"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
+    batch["roi_center"] = torch.cat([d["bbox_center"] for d in data], dim=0).to(
+        device, non_blocking=True
+    )
     for key in ["scene_im_id", "file_name", "model_info"]:
         # flatten the lists
         if key in data[0]:
@@ -1035,8 +1306,11 @@ def batch_data_test_self(cfg, data, device="cuda"):
     return batch
 
 
-def my_get_DIBR_models_renderer(cfg, data_ref, obj_names, preloaded="models_all_w_name.pkl"):
+def my_get_DIBR_models_renderer(
+    cfg, data_ref, obj_names, preloaded="models_all_w_name.pkl"
+):
     from lib.dr_utils.dib_renderer_x.renderer_dibr import load_ply_models, Renderer_dibr
+
     model_dir = data_ref.model_dir
 
     full_pth = osp.abspath(osp.join(model_dir, preloaded))
@@ -1061,15 +1335,21 @@ def my_get_DIBR_models_renderer(cfg, data_ref, obj_names, preloaded="models_all_
     models_selected = []
     for name in obj_names:
         model = models[name]
-        models_selected.append({
-            "vertices": torch.tensor(model["pts"], device='cuda', dtype=std_dtype),
-            "colors": torch.tensor(model["colors"], device='cuda', dtype=std_dtype),
-            "normals": torch.tensor(model["normals"], device='cuda', dtype=std_dtype),
-            "faces": torch.tensor(model["faces"], device='cuda', dtype=std_dtype),
-        })
+        models_selected.append(
+            {
+                "vertices": torch.tensor(model["pts"], device="cuda", dtype=std_dtype),
+                "colors": torch.tensor(model["colors"], device="cuda", dtype=std_dtype),
+                "normals": torch.tensor(
+                    model["normals"], device="cuda", dtype=std_dtype
+                ),
+                "faces": torch.tensor(model["faces"], device="cuda", dtype=std_dtype),
+            }
+        )
 
     ren_dibr = Renderer_dibr(
-        height=cfg.RENDERER.DIBR.HEIGHT, width=cfg.RENDERER.DIBR.WIDTH, mode=cfg.RENDERER.DIBR.MODE
+        height=cfg.RENDERER.DIBR.HEIGHT,
+        width=cfg.RENDERER.DIBR.WIDTH,
+        mode=cfg.RENDERER.DIBR.MODE,
     )
     return models_selected, ren_dibr
 
@@ -1083,11 +1363,15 @@ def get_DIBR_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=No
 
     model_dir = data_ref.model_dir
     obj_ids = [data_ref.obj2id[_obj] for _obj in obj_names]
-    model_paths = [osp.join(model_dir, "obj_{:06d}.ply".format(obj_id)) for obj_id in obj_ids]
+    model_paths = [
+        osp.join(model_dir, "obj_{:06d}.ply".format(obj_id)) for obj_id in obj_ids
+    ]
 
     texture_paths = None
     if data_ref.texture_paths is not None:
-        texture_paths = [osp.join(model_dir, "obj_{:06d}.png".format(obj_id)) for obj_id in obj_ids]
+        texture_paths = [
+            osp.join(model_dir, "obj_{:06d}.png".format(obj_id)) for obj_id in obj_ids
+        ]
     models = load_ply_models(
         model_paths=model_paths,
         texture_paths=texture_paths,
@@ -1110,11 +1394,17 @@ def get_dibr_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=No
     obj_ids = [data_ref.obj2id[_obj] for _obj in obj_names]
 
     model_scaled_root = data_ref.model_scaled_simple_dir
-    obj_paths = [osp.join(model_scaled_root, "{}/textured.obj".format(_obj)) for _obj in obj_names]
+    obj_paths = [
+        osp.join(model_scaled_root, "{}/textured.obj".format(_obj))
+        for _obj in obj_names
+    ]
 
     texture_paths = None
     if data_ref.texture_paths is not None:
-        texture_paths = [osp.join(model_scaled_root, "{}/texture_map.png".format(_obj)) for _obj in obj_names]
+        texture_paths = [
+            osp.join(model_scaled_root, "{}/texture_map.png".format(_obj))
+            for _obj in obj_names
+        ]
 
     models = load_ply_models(
         obj_paths=obj_paths,
@@ -1125,7 +1415,9 @@ def get_dibr_models_renderer(cfg, data_ref, obj_names, output_db=True, gpu_id=No
         height=512,
     )
     ren_dibr = Renderer_dibr(
-        height=cfg.RENDERER.DIBR.HEIGHT, width=cfg.RENDERER.DIBR.WIDTH, mode=cfg.RENDERER.DIBR.MODE
+        height=cfg.RENDERER.DIBR.HEIGHT,
+        width=cfg.RENDERER.DIBR.WIDTH,
+        mode=cfg.RENDERER.DIBR.MODE,
     )
     return models, ren_dibr
 
@@ -1137,11 +1429,15 @@ def get_egl_renderer_self(cfg, data_ref, obj_names, gpu_id=None):
     model_dir = data_ref.model_dir
 
     obj_ids = [data_ref.obj2id[_obj] for _obj in obj_names]
-    model_paths = [osp.join(model_dir, "obj_{:06d}.ply".format(obj_id)) for obj_id in obj_ids]
+    model_paths = [
+        osp.join(model_dir, "obj_{:06d}.ply".format(obj_id)) for obj_id in obj_ids
+    ]
 
     texture_paths = None
     if data_ref.texture_paths is not None:
-        texture_paths = [osp.join(model_dir, "obj_{:06d}.png".format(obj_id)) for obj_id in obj_ids]
+        texture_paths = [
+            osp.join(model_dir, "obj_{:06d}.png".format(obj_id)) for obj_id in obj_ids
+        ]
 
     ren = EGLRenderer(
         model_paths,
@@ -1163,7 +1459,12 @@ def get_out_coor(cfg, coor_x, coor_y, coor_z):
         coor_ = torch.cat([coor_x, coor_y, coor_z], dim=1)
     else:
         coor_ = torch.stack(
-            [torch.argmax(coor_x, dim=1), torch.argmax(coor_y, dim=1), torch.argmax(coor_z, dim=1)], dim=1
+            [
+                torch.argmax(coor_x, dim=1),
+                torch.argmax(coor_y, dim=1),
+                torch.argmax(coor_z, dim=1),
+            ],
+            dim=1,
         )
         # set the coordinats of background to (0, 0, 0)
         coor_[coor_ == cfg.MODEL.POSE_NET.GEO_HEAD.XYZ_BIN] = 0

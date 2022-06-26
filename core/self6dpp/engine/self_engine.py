@@ -385,7 +385,7 @@ def do_train(
     logger.info("Starting training from iteration {}".format(start_iter))
     iter_time = None
     with EventStorage(start_iter) as storage:
-        optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad()
         for iteration in range(start_iter, max_iter):
             storage.iter = iteration
             epoch = iteration // iters_per_epoch + 1  # epoch start from 1
@@ -590,7 +590,7 @@ def do_train(
                 optimizer.step()
 
             if iteration % accumulate_iter == 0:
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad()
                 storage.put_scalar(
                     "lr", optimizer.param_groups[0]["lr"], smoothing_hint=False
                 )

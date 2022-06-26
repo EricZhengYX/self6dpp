@@ -57,7 +57,7 @@ SOLVER = dict(
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
-    OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-4, weight_decay=0),
+    OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-6, weight_decay=0),
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=100,  # NOTE: only real data, iterations are very small
@@ -83,7 +83,7 @@ DATASETS = dict(
 DATASETS = dict(
     TRAIN=("lmo_NoBopTest_holepuncher_train",),  # real data
     TRAIN2_RATIO=0.0,
-    TEST=("lmo_holepuncher_test",),
+    TEST=("lmo_holepuncher_bop_test",),
     # for self-supervised training
     DET_FILES_TRAIN=(
         "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
@@ -108,7 +108,7 @@ Turn into GDRN_MaskNormVF
 
 RENDERER = dict(
     ENABLE=False,
-    DIFF_RENDERER="dibr",
+    DIFF_RENDERER="new_DIBR",
 )  # DIBR | dibr | new_DIBR
 MODEL = dict(
     # synthetically trained model
@@ -220,6 +220,13 @@ MODEL = dict(
             VIS_VF_LW=1.0,
             FULL_VF_LW=1.0,
             FULL_RT_VF_LW=1.0,
+            # vertex norm loss ---------------------------
+            NORM_LOSS_TYPE="L1+Cos",
+            VIS_NORM_LW=1.0,
+            FULL_NORM_LW=1.0,
+            # vertex norm-rt loss ---------------------------
+            NORM_RT_LOSS_TYPE="L1+Cos",
+            NORM_RT_LW=1.0,
             # LAB space loss ------------------
             LAB_NO_L=True,
             LAB_LW=0.2,

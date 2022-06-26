@@ -23,17 +23,18 @@ class VFLoss(nn.Module):
 
         @param out_vf: b*#fps*2*64*64
         @param gt_vf: b*#fps*2*64*64
-        @param mask: b*1*1*64*64
+        @param mask: b*1*64*64
         @return: l1+cos loss
         """
-        masked_out_vf = mask * out_vf
-        masked_gt_vf = mask * gt_vf
+        _mask = mask.unsqueeze(1)  # b*1*1*64*64
+        masked_out_vf = _mask * out_vf
+        masked_gt_vf = _mask * gt_vf
 
         loss = 0.0
         if self._with_l1:
             loss += self._l1_loss_func(masked_out_vf, masked_gt_vf)
         if self._with_cs:
-            loss += self._cosine_similarity_loss_vf(masked_out_vf, masked_gt_vf, mask)
+            loss += self._cosine_similarity_loss_vf(masked_out_vf, masked_gt_vf, _mask)
         return loss
 
     def _cosine_similarity_loss_vf(self, out_vf: torch.Tensor, gt_vf: torch.Tensor, mask: torch.Tensor):
