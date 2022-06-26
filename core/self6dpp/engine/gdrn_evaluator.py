@@ -613,16 +613,14 @@ def gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=False
 
             out_dict = model(
                 batch["roi_img"],
-                roi_classes=batch["roi_cls"],
+                roi_coord_2d=batch.get("roi_coord_2d"),
+                roi_coord_2d_rel=batch.get("roi_coord_2d_rel"),
                 roi_cams=batch["roi_cam"],
-                roi_whs=batch["roi_wh"],
                 roi_centers=batch["roi_center"],
+                roi_whs=batch["roi_wh"],
+                roi_extents=batch.get("roi_extent"),
                 resize_ratios=batch["resize_ratio"],
-                roi_coord_2d=batch.get("roi_coord_2d", None),
-                roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-                roi_extents=batch.get("roi_extent", None),
-                do_self=False,
-                loss_mode='pose',
+                forward_mode='pose',
             )
             if torch.cuda.is_available():
                 torch.cuda.synchronize()

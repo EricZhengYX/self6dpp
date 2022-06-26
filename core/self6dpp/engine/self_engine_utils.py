@@ -55,10 +55,13 @@ def compute_self_loss(
     pred_region,
     pred_vis_vf,
     pred_full_vf,
+    pred_vis_norm,
+    pred_full_norm,
     ren,
     ren_models,
     loss_mode,
     vf_loss_func=None,
+    norm_loss_func=None,
     ssim_func=None,
     ms_ssim_func=None,
     perceptual_func=None,
@@ -77,7 +80,10 @@ def compute_self_loss(
             pred_region=pred_region,
             pred_vis_vf=pred_vis_vf,
             pred_full_vf=pred_full_vf,
+            pred_vis_norm=pred_vis_norm,
+            pred_full_norm=pred_full_norm,
             vf_loss_func=vf_loss_func,
+            norm_loss_func=norm_loss_func,
             tb_writer=tb_writer,
             iteration=iteration,
         )
@@ -95,9 +101,12 @@ def compute_self_loss(
             pred_region=pred_region,
             pred_vis_vf=pred_vis_vf,
             pred_full_vf=pred_full_vf,
+            pred_vis_norm=pred_vis_norm,
+            pred_full_norm=pred_full_norm,
             ren=ren,
             ren_models=ren_models,
             vf_loss_func=vf_loss_func,
+            norm_loss_func=norm_loss_func,
             ssim_func=ssim_func,
             ms_ssim_func=ms_ssim_func,
             perceptual_func=perceptual_func,
@@ -119,7 +128,10 @@ def compute_self_loss_geo(
     pred_region,
     pred_vis_vf,
     pred_full_vf,
+    pred_vis_norm,
+    pred_full_norm,
     vf_loss_func,
+    norm_loss_func,
     tb_writer=None,
     iteration=None,
 ):
@@ -246,6 +258,16 @@ def compute_self_loss_geo(
         loss_dict["loss_init_pred_vf_full"] = vf_loss_full * self_loss_cfg.FULL_VF_LW
     # endregion
 
+    # region norm teacher<->pred loss -------------------------------
+    if self_loss_cfg.VIS_NORM_LW > 0:
+        norm_loss_vis = norm_loss_func(batch["pseudo_vis_norm"], pred_vis_norm, pseudo_vis_mask)
+        loss_dict["loss_init_pred_norm_vis"] = norm_loss_vis * self_loss_cfg.VIS_NORM_LW
+
+    if self_loss_cfg.FULL_NORM_LW > 0:
+        norm_loss_full = norm_loss_func(batch["pseudo_full_norm"], pred_full_norm, pseudo_full_mask)
+        loss_dict["loss_init_pred_norm_full"] = norm_loss_full * self_loss_cfg.FULL_NORM_LW
+    # endregion
+
     # grid_show and write to tensorboard -----------------------------------------------------
     if tb_writer is not None:
         show_ims = list(vis_data.values())
@@ -263,8 +285,8 @@ def compute_self_loss_geo(
 def _apply_augmentation_for_geo_batch(geo_batch: dict, augmenters: List[iaa.Augmenter]):
     vf_tensor_names = {
         'pseudo_vis_vf',
-        'pseudo_full_vf'
-    }
+        'pseudo_full_vf',
+    }  # vf tensors should be treated differently because of their 5-dim shapes
     b = len(augmenters)
     tensor_obj: torch.Tensor
     for name, tensor_obj in geo_batch.items():
@@ -304,12 +326,15 @@ def compute_self_loss_pose(
     pred_region,
     pred_vis_vf,
     pred_full_vf,
+    pred_vis_norm,
+    pred_full_norm,
     ren,
     ren_models,
-    vf_loss_func=None,
-    ssim_func=None,
-    ms_ssim_func=None,
-    perceptual_func=None,
+    vf_loss_func,
+    norm_loss_func,
+    ssim_func,
+    ms_ssim_func,
+    perceptual_func,
     tb_writer=None,
     iteration=None,
 ):
@@ -354,17 +379,19 @@ def compute_self_loss_pose(
         Ks=batch["K_renderer"],
         width=im_W,
         height=im_H,
-        mode=["color", "depth", "mask", "xyz", "prob"],
+        mode=["color", "depth", "mask", "norm", "prob"],
     )
     ren_img = rearrange(ren_ret["color"][..., [2, 1, 0]], "b h w c -> b c h w")  # bgr;[0,1]
     ren_mask = rearrange(ren_ret["mask"].to(torch.float32), "b h w -> b 1 h w")
+    # ren_norm = rearrange(ren_ret["norm"], "b h w c -> b c h w")
+    # ren_norm_roi = batch_crop_resize(ren_norm, batch["inst_rois"], out_H=in_res, out_W=in_res)
     if "prob" in ren_ret.keys():
         ren_prob = rearrange(ren_ret["prob"].to(torch.float32), "b h w -> b 1 h w")
     else:
         ren_prob = ren_mask
     # ren_depth = rearrange(ren_ret["depth"], "b h w -> b 1 h w").contiguous()
     ren_depth = ren_ret["depth"]  # bhw
-    ren_xyz = rearrange(ren_ret["xyz"], "b h w c -> b c h w")
+    # ren_xyz = rearrange(ren_ret["xyz"], "b h w c -> b c h w")
     # endregion
 
     # region make pseudo mask labels
@@ -505,6 +532,16 @@ def compute_self_loss_pose(
         vis_data["pred/vis_vf_roi"] = pred_vis_vf_vis
         pred_full_vf_vis = pred_full_vf[vis_i, 0, 0].detach().cpu().numpy()
         vis_data["pred/full_vf_roi"] = pred_full_vf_vis
+
+    # region norm teacher<->pred loss -------------------------------
+    if self_loss_cfg.VIS_NORM_LW > 0:
+        norm_loss_vis = norm_loss_func(batch["pseudo_vis_norm"], pred_vis_norm, pseudo_vis_mask)
+        loss_dict["loss_init_pred_norm_vis"] = norm_loss_vis * self_loss_cfg.VIS_NORM_LW
+
+    if self_loss_cfg.FULL_NORM_LW > 0:
+        norm_loss_full = norm_loss_func(batch["pseudo_full_norm"], pred_full_norm, pseudo_full_mask)
+        loss_dict["loss_init_pred_norm_full"] = norm_loss_full * self_loss_cfg.FULL_NORM_LW
+    # endregion
 
     # region prepare for color loss ----------------------
     if (
@@ -698,6 +735,8 @@ def batch_data_self(cfg, data, loss_mode, model_teacher=None, device="cuda", pha
     if phase != "train":
         return batch_data_test_self(cfg, data, device=device)
 
+    assert model_teacher is not None
+    assert not model_teacher.training, "teacher model must be in eval mode!"
     if loss_mode == 'geo':
         return batch_data_self_geo(cfg, data, model_teacher, device)
     elif loss_mode == 'pose':
@@ -712,8 +751,6 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     out_res = net_cfg.OUTPUT_RES
 
     tensor_kwargs = {"dtype": torch.float32, "device": device}
-    assert model_teacher is not None
-    assert not model_teacher.training, "teacher model must be in eval mode!"
     batch = {}
     # the image, infomation data and data from detection
     # augmented roi_image
@@ -734,6 +771,10 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     bs = batch["roi_cls"].shape[0]
     if "roi_coord_2d" in data[0]:
         batch["roi_coord_2d"] = torch.stack([d["roi_coord_2d"] for d in data], dim=0).to(
+            device=device, non_blocking=True
+        )
+    if "roi_coord_2d_rel" in data[0]:
+        batch["roi_coord_2d_rel"] = torch.stack([d["roi_coord_2d_rel"] for d in data], dim=0).to(
             device=device, non_blocking=True
         )
 
@@ -779,16 +820,14 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     with torch.no_grad():
         out_dict = model_teacher(
             batch["roi_gt_img"],
-            roi_classes=batch["roi_cls"],
+            roi_coord_2d=batch.get("roi_coord_2d"),
+            roi_coord_2d_rel=batch.get("roi_coord_2d_rel"),
             roi_cams=batch["roi_cam"],
-            roi_whs=batch["roi_wh"],
             roi_centers=batch["roi_center"],
+            roi_whs=batch["roi_wh"],
+            roi_extents=batch.get("roi_extent"),
             resize_ratios=batch["resize_ratio"],
-            roi_coord_2d=batch.get("roi_coord_2d", None),
-            roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-            roi_extents=batch.get("roi_extent", None),
-            do_self=True,
-            loss_mode='pose'
+            forward_mode='pose'
         )
         # rot, trans, mask, coor_x, coor_y, coor_z
 
@@ -812,6 +851,12 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
         batch["pseudo_trans"] = out_dict["trans"]
     else:
         raise ValueError(pseudo_pose_type)
+
+    pose_gt = torch.stack([d["pose_gt"] for d in data], dim=0).to(
+        device=device, dtype=torch.float32, non_blocking=True
+    )
+    batch["gt_rot"] = pose_gt[:, :3, :3]
+    batch["gt_trans"] = pose_gt[:, :3, 3:]
 
     # batch["pseudo_mask"] = out_dict["mask"]
     batch["pseudo_vis_mask_prob"] = vis_mask_prob = out_dict["vis_mask_prob"]
@@ -840,12 +885,14 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     batch["pseudo_full_vf"] = out_dict["full_vf"]
     batch["pseudo_vis_vf"] = out_dict["vis_vf"]
 
+    # vertex norm
+    batch["pseudo_full_norm"] = out_dict["full_norm"]
+    batch["pseudo_vis_norm"] = out_dict["vis_norm"]
+
     return batch
 
 
 def batch_data_self_geo(cfg, data, model_teacher, device):
-    assert not model_teacher.training, "teacher model must be in eval mode!"
-
     batch = {
         "roi_img": torch.stack([d["roi_img"] for d in data], dim=0).to(device, non_blocking=True),
         "roi_gt_img": torch.stack([d["roi_gt_img"] for d in data], dim=0).to(device, non_blocking=True),
@@ -856,7 +903,7 @@ def batch_data_self_geo(cfg, data, model_teacher, device):
     with torch.no_grad():
         out_dict = model_teacher(
             batch["roi_gt_img"],
-            loss_mode="geo",
+            forward_mode="geo",
         )
     for k, l in out_dict.items():
         batch["pseudo_" + k] = l

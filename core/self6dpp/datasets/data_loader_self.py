@@ -412,10 +412,10 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
 
         ## load pseudo pose if configured ----------------------------
         if cfg.MODEL.LOAD_DETS_TRAIN_WITH_POSE:
-            pose_est = np.array(anno["pose_est"], dtype=np.float32)
-            pose_refine = np.array(anno["pose_refine"], dtype=np.float32)
-            dataset_dict["pose_est"] = torch.as_tensor(pose_est)
-            dataset_dict["pose_refine"] = torch.as_tensor(pose_refine)
+            dataset_dict["pose_est"] = torch.tensor(anno["pose_est"], dtype=torch.float32)
+            dataset_dict["pose_refine"] = torch.tensor(anno["pose_refine"], dtype=torch.float32)
+            if "pose_gt" in anno:
+                dataset_dict["pose_gt"] = torch.tensor(anno["pose_gt"], dtype=torch.float32)
 
         # CHW, float32 tensor
         ## roi_image ------------------------------------
@@ -458,6 +458,11 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         roi_coord_2d = crop_resize_by_warp_affine(
             coord_2d, bbox_center, scale, out_res, interpolation=cv2.INTER_LINEAR
         ).transpose(2, 0, 1)
+        # roi_coord_2d_rel
+        roi_coord_2d_rel = (
+               bbox_center.reshape(2, 1, 1)
+               - roi_coord_2d * np.array([im_W, im_H]).reshape(2, 1, 1)
+       ) / scale
 
         # fps points: for vf
         if g_head_cfg.NUM_CHANNAL_VF > 1:
@@ -515,9 +520,8 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
             )
             dataset_dict["sym_info"] = self._get_sym_infos(dataset_name)[roi_cls]
 
-            dataset_dict["roi_coord_2d"] = torch.as_tensor(
-                roi_coord_2d.astype("float32")
-            ).contiguous()
+            dataset_dict["roi_coord_2d"] = torch.as_tensor(roi_coord_2d.astype("float32")).contiguous()
+            dataset_dict["roi_coord_2d_rel"] = torch.as_tensor(roi_coord_2d_rel.astype("float32")).contiguous()
 
             dataset_dict["bbox_center"] = torch.as_tensor(bbox_center, dtype=torch.float32)
             dataset_dict["scale"] = scale
@@ -789,6 +793,10 @@ def load_detections_with_poses_into_dataset(
             logger.warning(f"no detections found in {scene_im_id}")
             continue
         dets_i = detections[scene_im_id]
+        record_anno_ori_dict = {
+            anno["category_id"]: anno
+            for anno in record["annotations"]
+        }
 
         annotations = []
         obj_annotations = {obj: [] for obj in objs}
@@ -827,6 +835,12 @@ def load_detections_with_poses_into_dataset(
                 assert "pose_est" in det and "pose_refine" in det
                 inst["pose_est"] = det["pose_est"]
                 inst["pose_refine"] = det["pose_refine"]
+
+                pose_gt = record_anno_ori_dict[label].get("pose").tolist()
+                if pose_gt is None:
+                    logger.warning("No gt pose found for {}::{}".format(scene_im_id, obj_name))
+                else:
+                    inst["pose_gt"] = pose_gt
             obj_annotations[obj_name].append(inst)
         for obj, cur_annos in obj_annotations.items():
             scores = [ann["score"] for ann in cur_annos]

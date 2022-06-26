@@ -1,6 +1,6 @@
-_base_ = ["../_base_/self6dpp_base.py"]
+_base_ = ["../../_base_/self6dpp_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/self_my_config/ape"
+OUTPUT_DIR = "output/self6dpp/new_config/holepuncher"
 INPUT = dict(
     WITH_DEPTH=False,
     DZI_PAD_SCALE=1.5,
@@ -65,28 +65,25 @@ SOLVER = dict(
     CILP_GRAD=20,
 )
 
-'''
+"""
 DATASETS = dict(
-    TRAIN=("lmo_NoBopTest_train",),  # real data
-    TRAIN2=(),  # synthetic data    "lm_pbr_ape_train",
+    TRAIN=("lm_holepuncher_train",),  # real data
     TRAIN2_RATIO=0.0,
-    TEST=("lm_real_ape_test", "lmo_ape_test"),  # lmo_test lm_real_ape_test lmo_ape_test
+    TEST=("lm_holepuncher_test",),
     # for self-supervised training
     DET_FILES_TRAIN=(
-        "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
+        "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lm_13_train.json",
     ),
     DET_THR_TRAIN=0.5,
     DET_FILES_TEST=(
         "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
-        "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
     ),
 )
-'''
+"""
 DATASETS = dict(
     TRAIN=("lmo_NoBopTest_holepuncher_train",),  # real data
-    # TRAIN2=("lmo_pbr_ape_train",),  # synthetic data
     TRAIN2_RATIO=0.0,
-    TEST=("lmo_NoBopTest_holepuncher_train",),
+    TEST=("lmo_holepuncher_test",),
     # for self-supervised training
     DET_FILES_TRAIN=(
         "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
@@ -115,7 +112,7 @@ RENDERER = dict(
 )  # DIBR | dibr | new_DIBR
 MODEL = dict(
     # synthetically trained model
-    WEIGHTS="/home/eric/py_ws/self6dpp/gdrn_all.pth",
+    WEIGHTS="halfway_hp.pth",
     # init
     # ad10    rete5    te2
     # 57.90   57.24    85.33

@@ -11,6 +11,46 @@ from .net_factory import NECKS, HEADS
 logger = logging.getLogger(__name__)
 
 
+def get_xyz_mask_norm_vf_region_out_dim(cfg):
+    net_cfg = cfg.MODEL.POSE_NET
+    g_head_cfg = net_cfg.GEO_HEAD
+    loss_cfg = net_cfg.LOSS_CFG
+
+    xyz_loss_type = loss_cfg.XYZ_LOSS_TYPE
+    if xyz_loss_type in ["MSE", "L1", "L2", "SmoothL1"]:
+        xyz_out_dim = 3
+    elif xyz_loss_type in ["CE_coor", "CE"]:
+        xyz_out_dim = 3 * (g_head_cfg.XYZ_BIN + 1)
+    else:
+        raise NotImplementedError(f"unknown xyz loss type: {xyz_loss_type}")
+
+    mask_loss_type = loss_cfg.MASK_LOSS_TYPE
+    if mask_loss_type in ["L1", "BCE", "RW_BCE", "dice"]:
+        mask_out_dim = 2
+    elif mask_loss_type in ["CE"]:
+        mask_out_dim = 4
+    else:
+        raise NotImplementedError(f"unknown mask loss type: {mask_loss_type}")
+
+    vf_loss_type = loss_cfg.VF_LOSS_TYPE
+    if vf_loss_type in ["MSE", "L1", "L2", "SmoothL1", "L1+Cos"]:
+        vf_out_dim = 2 * 2 * g_head_cfg.NUM_CHANNAL_VF  # {u, v} * {vis, full} * N_fps
+    else:
+        raise NotImplementedError(f"unknown vf loss type: {vf_loss_type}")
+
+    norm_loss_type = loss_cfg.NORM_LOSS_TYPE
+    if norm_loss_type in ["L1+Cos",]:
+        norm_out_dim = 2 * 3  # {vis, full} * 3
+    else:
+        raise NotImplementedError(f"unknown norm loss type: {norm_loss_type}")
+
+    region_out_dim = g_head_cfg.NUM_REGIONS + 1
+    # at least 2 regions (with bg, at least 3 regions)
+    assert region_out_dim > 2, region_out_dim
+
+    return xyz_out_dim, mask_out_dim, region_out_dim, vf_out_dim, norm_out_dim
+
+
 def get_xyz_doublemask_doublevf_region_out_dim(cfg):
     net_cfg = cfg.MODEL.POSE_NET
     g_head_cfg = net_cfg.GEO_HEAD
@@ -167,6 +207,23 @@ def get_geo_head(cfg):
             xyz_out_dim=xyz_dim,
             mask_out_dim=mask_dim,
         )
+    elif geo_head_type == "TopDownMaskNormVFXyzRegionHead":
+        xyz_dim, mask_dim, region_dim, vf_dim, norm_dim = get_xyz_mask_norm_vf_region_out_dim(cfg)
+        region_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.REGION_CLASS_AWARE else 1
+        vf_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.VF_CLASS_AWARE else 1
+        norm_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.NORM_CLASS_AWARE else 1
+        geo_head_init_cfg.update(
+            xyz_num_classes=xyz_num_classes,
+            mask_num_classes=mask_num_classes,
+            region_num_classes=region_num_classes,
+            vf_num_classes=vf_num_classes,
+            norm_num_classes=norm_num_classes,
+            xyz_out_dim=xyz_dim,
+            mask_out_dim=mask_dim,
+            region_out_dim=region_dim,
+            vf_out_dim=vf_dim,
+            norm_out_dim=norm_dim,
+        )
     elif "DoubleMask" in geo_head_type and "DoubleVF" in geo_head_type:
         xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
         region_num_classes = net_cfg.NUM_CLASSES if geo_head_cfg.REGION_CLASS_AWARE else 1
@@ -226,10 +283,14 @@ def get_pnp_net(cfg):
     pnp_net_cfg = net_cfg.PNP_NET
     loss_cfg = net_cfg.LOSS_CFG
 
-    if pnp_net_cfg.get("WITH_VF", "none") != "none":
+    if pnp_net_cfg.INIT_CFG.type == "ConvPnPNetMaskNormVF":
+        xyz_dim, mask_dim, region_dim, vf_dim, norm_dim = get_xyz_mask_norm_vf_region_out_dim(cfg)
+    elif pnp_net_cfg.INIT_CFG.type == "ConvPnPNetAll":
         xyz_dim, mask_dim, region_dim, vf_dim = get_xyz_doublemask_doublevf_region_out_dim(cfg)
-    else:
+    elif pnp_net_cfg.INIT_CFG.type == "ConvPnPNet":
         xyz_dim, mask_dim, region_dim = get_xyz_doublemask_region_out_dim(cfg)
+    else:
+        raise NotImplementedError(pnp_net_cfg.INIT_CFG.type)
 
     if loss_cfg.XYZ_LOSS_TYPE in ["CE_coor", "CE"]:
         pnp_net_in_channel = xyz_dim - 3  # for bin xyz, no bg channel
@@ -252,7 +313,16 @@ def get_pnp_net(cfg):
     elif pnp_net_cfg.WITH_VF == "both":
         pnp_net_in_channel += 4 * g_head_cfg.NUM_CHANNAL_VF
     else:
-        raise ValueError(f"Unknown ROT_TYPE: {pnp_net_cfg.WITH_VF}")
+        raise ValueError(f"Unknown VF type for PnP: {pnp_net_cfg.WITH_VF}")
+
+    if not hasattr(pnp_net_cfg, "WITH_NORM") or pnp_net_cfg.WITH_NORM == "none":
+        pass
+    elif pnp_net_cfg.WITH_NORM in ["visib", "full"]:
+        pnp_net_in_channel += 3
+    elif pnp_net_cfg.WITH_NORM == "both":
+        pnp_net_in_channel += 2 * 3
+    else:
+        raise ValueError(f"Unknown NORM type for PnP: {pnp_net_cfg.WITH_NORM}")
 
     if pnp_net_cfg.ROT_TYPE in ["allo_quat", "ego_quat"]:
         rot_dim = 4
@@ -271,7 +341,13 @@ def get_pnp_net(cfg):
     pnp_net_init_cfg = copy.deepcopy(pnp_net_cfg.INIT_CFG)
     pnp_head_type = pnp_net_init_cfg.pop("type")
 
-    if pnp_head_type == "ConvPnPNetAll":
+    if pnp_head_type == "ConvPnPNetMaskNormVF":
+        pnp_net_init_cfg.update(
+            nIn=pnp_net_in_channel,
+            rot_dim=rot_dim,
+            mask_attention_type=pnp_net_cfg.MASK_ATTENTION,
+        )
+    elif pnp_head_type == "ConvPnPNetAll":
         pnp_net_init_cfg.update(
             nIn=pnp_net_in_channel,
             rot_dim=rot_dim,
@@ -308,12 +384,6 @@ def get_pnp_net(cfg):
             with torch.no_grad():
                 param.requires_grad = False
     else:
-        if pnp_net_cfg.TRAIN_R_ONLY:
-            logger.info("Train fc_r only...")
-            for name, param in pnp_net.named_parameters():
-                if "fc_r" not in name:
-                    with torch.no_grad():
-                        param.requires_grad = False
         params_lr_list.append(
             {
                 "params": filter(lambda p: p.requires_grad, pnp_net.parameters()),

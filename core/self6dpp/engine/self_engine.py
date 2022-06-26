@@ -47,7 +47,7 @@ from core.self6dpp.datasets.data_loader import (
     build_gdrn_test_loader,
 )
 from core.self6dpp.losses.ssim import SSIM, MS_SSIM
-from core.self6dpp.losses.vf_loss import VFLoss
+from core.self6dpp.losses.vf_norm_loss import VFLoss, NORMLoss
 from core.self6dpp.losses.perceptual_loss import PerceptualLoss
 
 from .gdrn_engine_utils import batch_data, get_out_coor, get_out_mask
@@ -341,6 +341,7 @@ def do_train(
     ssim_func = SSIM(data_range=1.0).cuda()
     ms_ssim_func = MS_SSIM(data_range=1.0, normalize=True).cuda()
     vf_loss_func = VFLoss().cuda()
+    norm_loss_func = NORMLoss().cuda()
     if self_loss_cfg.PERCEPT_LW > 0:
         percep_loss_func = PerceptualLoss(model="net", net="alex", use_gpu=True)
     else:
@@ -476,18 +477,16 @@ def do_train(
                 # only outputs, no losses
                 out_dict = model(
                     batch["roi_img"],
-                    gt_points=batch.get("roi_points", None),
-                    sym_infos=batch.get("sym_info", None),
-                    roi_classes=batch.get("roi_cls", None),
-                    roi_cams=batch.get("roi_cam", None),
-                    roi_whs=batch.get("roi_wh", None),
-                    roi_centers=batch.get("roi_center", None),
-                    resize_ratios=batch.get("resize_ratio", None),
-                    roi_coord_2d=batch.get("roi_coord_2d", None),
-                    roi_extents=batch.get("roi_extent", None),
-                    do_loss=False,
-                    do_self=True,
-                    loss_mode=this_iter_data_mode,
+                    gt_ego_rot=batch.get("gt_rot"),
+                    gt_trans=batch.get("gt_trans"),
+                    roi_coord_2d=batch.get("roi_coord_2d"),
+                    roi_coord_2d_rel=batch.get("roi_coord_2d_rel"),
+                    roi_cams=batch.get("roi_cam"),
+                    roi_centers=batch.get("roi_center"),
+                    roi_whs=batch.get("roi_wh"),
+                    roi_extents=batch.get("roi_extent"),
+                    resize_ratios=batch.get("resize_ratio"),
+                    forward_mode=this_iter_data_mode,
                 )
                 # compute self-supervised losses
 
@@ -504,10 +503,13 @@ def do_train(
                     pred_region=out_dict["region"],
                     pred_vis_vf=out_dict["vis_vf"],
                     pred_full_vf=out_dict["full_vf"],
+                    pred_vis_norm=out_dict["vis_norm"],
+                    pred_full_norm=out_dict["full_norm"],
                     ren=renderer,
                     ren_models=ren_models,
                     loss_mode=this_iter_data_mode,
                     vf_loss_func=vf_loss_func,
+                    norm_loss_func=norm_loss_func,
                     ssim_func=ssim_func,
                     ms_ssim_func=ms_ssim_func,
                     perceptual_func=percep_loss_func,
