@@ -37,6 +37,9 @@ from lib.vis_utils.image import heatmap, grid_show
 from lib.pysixd.inout import load_ply
 
 
+render_func = None
+
+
 def fig2img(fig):
     """Convert a Matplotlib figure to a PIL Image and return it."""
     buf = io.BytesIO()
@@ -61,7 +64,7 @@ def compute_self_loss(
     pred_full_vf,
     pred_vis_norm,
     pred_full_norm,
-    ren,
+    ren_func,
     ren_models,
     loss_mode,
     vf_loss_func=None,
@@ -107,7 +110,7 @@ def compute_self_loss(
             pred_full_vf=pred_full_vf,
             pred_vis_norm=pred_vis_norm,
             pred_full_norm=pred_full_norm,
-            ren=ren,
+            ren_func=ren_func,
             ren_models=ren_models,
             vf_loss_func=vf_loss_func,
             norm_loss_func=norm_loss_func,
@@ -391,7 +394,7 @@ def compute_self_loss_pose(
     pred_full_vf,
     pred_vis_norm,
     pred_full_norm,
-    ren,
+    ren_func,
     ren_models,
     vf_loss_func,
     norm_loss_func,
@@ -420,28 +423,6 @@ def compute_self_loss_pose(
 
     # get rendered mask/rgb/depth/xyz using DIBR
     cur_models = [ren_models[int(_l)] for _l in batch["roi_cls"]]
-
-    if cfg.RENDERER.DIFF_RENDERER == "DIBR":
-        ren_func = {
-            "batch": partial(ren.render_batch, antialias=True),
-            "batch_single": partial(ren.render_batch_single, antialias=True),
-            "batch_tex": partial(
-                ren.render_batch_tex, max_mip_level=9, uv_type="vertex"
-            ),
-            "batch_single_tex": partial(
-                ren.render_batch_single_tex, max_mip_level=9, uv_type="vertex"
-            ),
-        }[cfg.RENDERER.RENDER_TYPE]
-    elif cfg.RENDERER.DIFF_RENDERER in ["new_DIBR", "dibr"]:
-        ren_func = {
-            "batch": partial(ren.render_batch),
-            "batch_tex": partial(ren.render_batch_tex, uv_type="face"),
-        }[cfg.RENDERER.RENDER_TYPE]
-    else:
-        raise ValueError("Unknown differentiable renderer type")
-    # endregion
-
-    # region make rendering
     ren_ret = ren_func(
         pred_rot,
         pred_trans,
@@ -1071,6 +1052,7 @@ def batch_data_self_pose(cfg, data, model_teacher, device):
     pose_gt = torch.stack([d["pose_gt"] for d in data], dim=0).to(
         device=device, dtype=torch.float32, non_blocking=True
     )
+    batch["gt_pose_bx3x4"] = pose_gt
     batch["gt_rot"] = pose_gt[:, :3, :3]
     batch["gt_trans"] = pose_gt[:, :3, 3:]
 
@@ -1513,3 +1495,27 @@ def vis_batch_self(cfg, batch, phase="train"):
         nrow = int(np.ceil(len(show_ims) / ncol))
         grid_show(show_ims, show_titles, row=nrow, col=ncol)
     # yapf: enable
+
+
+def assign_renderer_function(cfg, renderer):
+    global render_func
+    if render_func is None:
+        if cfg.RENDERER.DIFF_RENDERER == "DIBR":
+            render_func = {
+                "batch": partial(renderer.render_batch, antialias=True),
+                "batch_single": partial(renderer.render_batch_single, antialias=True),
+                "batch_tex": partial(
+                    renderer.render_batch_tex, max_mip_level=9, uv_type="vertex"
+                ),
+                "batch_single_tex": partial(
+                    renderer.render_batch_single_tex, max_mip_level=9, uv_type="vertex"
+                ),
+            }[cfg.RENDERER.RENDER_TYPE]
+        elif cfg.RENDERER.DIFF_RENDERER in ["new_DIBR", "dibr"]:
+            render_func = {
+                "batch": partial(renderer.render_batch),
+                "batch_tex": partial(renderer.render_batch_tex, uv_type="face"),
+            }[cfg.RENDERER.RENDER_TYPE]
+        else:
+            raise ValueError("Unknown differentiable renderer type")
+    return render_func

@@ -261,7 +261,7 @@ MODEL = dict(
 
 TRAIN = dict(
     DEBUG_SINGLE_IM=False,
-    RECORD_TRAIN_SAMPLE_ID=True,
+    RECORD_DURING_TRAINING=True,
 )
 
 TEST = dict(
@@ -269,3 +269,16 @@ TEST = dict(
     VIS=False,
     TEST_BBOX_TYPE="est"
 )  # gt | est
+
+REPJ_REFINE = dict(
+    ENABLE=True,
+    REPJ_REFINER_LW=dict(
+        IOU2D3D=0.1,
+        PM=10,
+        MIOU=1,
+        MSSSIM=1,
+    ),
+    RENDERER=dict(
+        SHRINK=1,
+    )
+)

@@ -499,6 +499,14 @@ def get_mask_prob(pred_mask, mask_loss_type):
 
 
 def compute_mean_re_te(pred_transes, pred_rots, gt_transes, gt_rots):
+    """
+
+    @param pred_transes: Tensor b*3*1
+    @param pred_rots: Tensor b*3*3
+    @param gt_transes: Tensor b*3*1
+    @param gt_rots: Tensor b*3*3
+    @return: rot error (float); trans error (float)
+    """
     pred_transes = pred_transes.detach().cpu().numpy()
     pred_rots = pred_rots.detach().cpu().numpy()
     gt_transes = gt_transes.detach().cpu().numpy()

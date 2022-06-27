@@ -1,53 +1,61 @@
 import logging
+from functools import partial
+from typing import List, Callable
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops.roi_align import roi_align
+from einops import rearrange
+from detectron2.utils.events import get_event_storage
 
 from core.self6dpp.losses.rot_loss import angular_distance_rot
 from core.self6dpp.losses.pm_loss import PyPMLoss
 from core.self6dpp.losses.mask_iou_loss import MaskIOULoss
 from core.self6dpp.losses.bbox_iou_loss import IOULoss
 from core.self6dpp.losses.ssim import MS_SSIM
-from core.self6dpp.losses.perceptual_loss import PerceptualLoss
-from lib.dr_utils.dib_renderer_x.renderer_dibr import Renderer_dibr as Render
-
+from core.self6dpp.models.model_utils import compute_mean_re_te
 from lib.pysixd.pose_error import add, adi
 
 import matplotlib
 from matplotlib import pyplot as plt
 
 matplotlib.use("TkAgg")
-
-HEIGHT = 480
-WIDTH = 640
-DEBUG = False
-models_dir = "datasets/BOP_DATASETS/ycbv/models"
-
 logger = logging.getLogger(__name__)
 
 
 class RepjRefiner(nn.Module):
-    def __init__(self, cfg, render: Render):
+    def __init__(
+        self,
+        cfg,
+        render: Callable,
+        models: List,
+        models_info: List,
+        train_obj_names: List,
+    ):
         super().__init__()
-        assert cfg.REFINER.DO_REFINE, "Rep head not enabled"
+        assert cfg.REPJ_REFINE.ENABLE, "RepjRefiner is not enabled"
 
         # configs
         self.cfg = cfg
 
-        # RENDER
-        self.render = render
-
+        # Rendering
+        self.render_shrink = cfg.REPJ_REFINE.RENDERER.SHRINK
+        self.ren_W = int(cfg.RENDERER.DIBR.WIDTH / self.render_shrink)
+        self.ren_H = int(cfg.RENDERER.DIBR.HEIGHT / self.render_shrink)
+        self.render = partial(
+            render, width=self.ren_W, height=self.ren_H, mode=["color", "prob"]
+        )
         # Device
         self.device = "cuda"  # cfg.MODEL.DEVICE
         # Models & Models_info
-        self.models = self.render.get_models()
-        self.raw_models_info = self.render.get_models_info()
-        self.models_info = {
-            name: self._get_model_info_tensor(d)
-            for name, d in self.raw_models_info.items()
-        }
+        self.obj_names = train_obj_names
+        self.models = models
+        self.raw_models_info = models_info
+        self.models_info = [
+            self._get_model_info_tensor(d) for d in self.raw_models_info
+        ]
+        assert len(self.obj_names) == len(self.models) == len(self.models_info)
 
         # Loss weights
         self.weights = self._get_loss_weight(cfg=cfg)
@@ -61,11 +69,8 @@ class RepjRefiner(nn.Module):
             t_loss_use_points=True,
             r_only=False,
         )
-        self.mask_iou_loss = MaskIOULoss(
-            reduction="mean"
-        )
-        self.perceptual_loss = PerceptualLoss()
-        # self.ssim_loss_1 = MS_SSIM(channel=1)
+        self.mask_iou_loss = MaskIOULoss(reduction="mean")
+        # self.ssim_loss_1 = MS_SSIM(channel=1).cuda()
         self.ssim_loss_3 = MS_SSIM(channel=3).cuda()
 
         # other things
@@ -76,108 +81,97 @@ class RepjRefiner(nn.Module):
             4: 4,
         }
 
-    def forward(self, inf_dict, ori_batch, seq_name):
-        _set_roi_cls = set(ori_batch["roi_cls"].tolist())
-        assert len(_set_roi_cls) == 1, ori_batch["roi_cls"].tolist()
+    def forward(
+        self,
+        gt_pose,
+        inf_rot,
+        inf_trans,
+        inf_full_masks,
+        inf_vis_masks,
+        roi_cls,
+        roi_centers,
+        roi_whs,
+        cam_K,
+        sym_infos=None,
+    ):
+        """
 
-        # self.dib_ren.set_camera_parameters_from_RT_K(Rs, ts, Ks, height=480, width=640, near=0.01, far=10, rot_type="mat")
-
-        inf_r = inf_dict["rot"]
-        inf_t = inf_dict["trans"].unsqueeze(2)
-        assert inf_t.shape[0] == inf_r.shape[0]
-        inf_r, inf_t = inf_r.to(self.device), inf_t.to(self.device)
-
-        # TODO: Now actually sym_infos is not using
-        sym_infos = ori_batch.get("sym_info", None)
+        @param gt_pose: b*3*4
+        @param inf_rot: b*3*3
+        @param inf_trans: b*3*1
+        @param inf_full_masks: b*64*64
+        @param inf_vis_masks: b*64*64
+        @param roi_cls: b
+        @param roi_centers: b*2
+        @param roi_whs: b*2
+        @param cam_K: b*3*3
+        @param sym_infos: b*3*3/None
+        @return: ws_out_dict, ws_loss_dict, ws_record_dict
+        """
+        assert (
+            len(set(roi_cls)) == 1
+        ), "When using RepjRefiner, cls in one batch should be consist"
+        assert (
+            inf_rot.shape[0]
+            == inf_trans.shape[0]
+            == roi_cls.shape[0]
+            == roi_centers.shape[0]
+            == roi_whs.shape[0]
+        )
 
         # The rendering can only be done on cuda
         batch_size = self.batch_size
         loss_dict = {}
-        out_dict = {}
+        vis_dict = {}
         record_dict = {}
         _cam_paras = {}
-        rendering_bank = {}
 
-        # camera intrinsic
-        Ks = ori_batch["roi_cam"]
+        # basic renderer settings
+        roi_cls_id = roi_cls[0]
+        roi_cs = roi_centers / self.render_shrink
+        roi_whs = roi_whs / self.render_shrink
+        cur_models = [self.models[int(_l)] for _l in roi_cls]
 
-        # First, make rendering for scale 1
-        roi_cs = ori_batch["roi_center"] / self.render.shrink
-        roi_whs = ori_batch["roi_wh"] / self.render.shrink
-        ori_roi = _bgr2rgb(ori_batch["roi_img"])
-        ren_img_inf, ren_prob_mask_inf, _, _ = self.render(inf_r, inf_t, seq_name, Ks)
-        ren_img_inf = ren_img_inf.permute(0, 3, 1, 2)
-        ren_prob_mask_inf = ren_prob_mask_inf.permute(0, 3, 1, 2)
-        # ren_prob_mask_inf_crop = self.crop_resize_tensor(
-        #     ren_prob_mask_inf, roi_cs, roi_whs, out_size=ori_roi.shape[-2:]
-        # )
-        ren_img_inf_crop = self.crop_resize_tensor(
-            ren_img_inf, roi_cs, roi_whs, out_size=ori_roi.shape[-2:]
-        )
-
-        # region self loss
-        pseudo_vis_mask = (inf_dict["vis_mask"] > 0.5).to(torch.float32)
-        pseudo_vis_mask = F.interpolate(
-            pseudo_vis_mask,
-            size=ori_roi.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        loss_dict["self_loss ms-ssim"] = (
-            1 - self.ssim_loss_3(
-                ren_img_inf_crop * pseudo_vis_mask,
-                ori_roi * pseudo_vis_mask
-            )
-        ).mean() * self.weights.SELF_MSSSIM
-        loss_dict["self_loss perceptual"] = self.perceptual_loss(
-            ren_img_inf_crop * pseudo_vis_mask,
-            ori_roi * pseudo_vis_mask
-        ) * self.weights.SELF_PERCEP
-        # endregion
-
-        full_mask_vec = inf_dict["full_mask"].view(batch_size, -1).cpu().detach()
-        vis_mask_vec = inf_dict["vis_mask"].view(batch_size, -1).cpu().detach()
+        # best view point
+        full_mask_vec = inf_full_masks.view(batch_size, -1).cpu().detach()
+        vis_mask_vec = inf_vis_masks.view(batch_size, -1).cpu().detach()
         sim_scores = F.cosine_similarity(full_mask_vec, vis_mask_vec).numpy()
-
         best_inf_idx = np.argmax(sim_scores)
 
         record_dict["best idx"] = int(best_inf_idx)
         record_dict["sim_scores"] = sim_scores.tolist()
-        rendering_bank[self.rendering_name_str()] = ren_img_inf
-        rendering_bank[self.rendering_name_str(itype="pmsk")] = ren_prob_mask_inf
 
         # ==================== calculate & concat repj and inf paras ====================
         # region Rep&Inf-paras
         gt_pose = torch.cat(
             (
-                torch.cat(
-                    (ori_batch["ego_rot"], ori_batch["trans"].unsqueeze(2)), dim=-1
-                ),
+                gt_pose,
                 torch.tensor([[[0.0, 0.0, 0.0, 1.0]]], device=self.device).repeat(
                     batch_size, 1, 1
                 ),
             ),
             dim=1,
-        ).detach()
+        ).detach()  # b*4*4
         rep_poses = torch.tensor((), device=self.device)
         rep_K = torch.tensor((), device=self.device)
+        rep_models = []
 
         for i in range(batch_size):
             if i == best_inf_idx:
                 continue
-
             # =========== Repj pose ===========
             this_cam_para = gt_pose[best_inf_idx] @ torch.inverse(gt_pose[i])
             tgt_inf_pose = torch.cat(
                 (
-                    torch.cat((inf_r[i], inf_t[i].view(3, 1)), dim=-1),
+                    torch.cat((inf_rot[i], inf_trans[i]), dim=-1),
                     torch.tensor([[0.0, 0.0, 0.0, 1.0]], device=self.device),
                 ),
                 dim=0,
             )
             src_rep_pose = this_cam_para @ tgt_inf_pose
             rep_poses = torch.cat((rep_poses, src_rep_pose.unsqueeze(0)))
-            rep_K = torch.cat((rep_K, Ks[i].unsqueeze(0)))
+            rep_K = torch.cat((rep_K, cam_K[i].unsqueeze(0)))
+            rep_models.append(cur_models[i])
         # endregion
 
         # =========== Disentangle R&T ===========
@@ -188,59 +182,47 @@ class RepjRefiner(nn.Module):
 
         # ==================== Which are pseudo labels? ====================
         # region pseudo-labels
-        best_inf_r = inf_r[best_inf_idx].unsqueeze(0).detach()
-        best_inf_t = inf_t[best_inf_idx].unsqueeze(0).detach()
+        best_inf_r = inf_rot[best_inf_idx].unsqueeze(0).detach()
+        best_inf_t = inf_trans[best_inf_idx].unsqueeze(0).detach()
         inf_rs = best_inf_r.repeat(batch_size - 1, 1, 1)
         inf_ts = best_inf_t.repeat(batch_size - 1, 1, 1)
-        inf_K = Ks[best_inf_idx].unsqueeze(0).repeat(batch_size - 1, 1, 1)
+        inf_K = cam_K[best_inf_idx].unsqueeze(0).repeat(batch_size - 1, 1, 1)
         # endregion
 
         # ==================== Mask IOU loss + SSIM loss ====================
         # region miou+ssim
-        valid_mious = []
-        valid_miou_nums = {}
         for scale_name, scale in self.multi_scale_miou.items():
-            if scale == 1:
-                img_inf = (
-                    rendering_bank[self.rendering_name_str()][best_inf_idx]
-                    .unsqueeze(0)
-                    .repeat(batch_size - 1, 1, 1, 1)
-                    .detach()
-                )  # b - 1, c, w, h
-                mask_inf = (
-                    rendering_bank[self.rendering_name_str(itype="pmsk")][best_inf_idx]
-                    .squeeze(1)
-                    .repeat(batch_size - 1, 1, 1)
-                    .detach()
-                )  # b - 1, w, h
-            else:
-                ren_img_inf, ren_prob_mask_inf, _, _ = self.render(
-                    best_inf_r,
-                    best_inf_t / scale,
-                    seq_name,
-                    Ks[best_inf_idx].unsqueeze(0),
-                )
-                img_inf = ren_img_inf.repeat(batch_size - 1, 1, 1, 1).permute(
-                    0, 3, 1, 2
-                )
-                mask_inf = ren_prob_mask_inf.squeeze(3).repeat(batch_size - 1, 1, 1)
-            ms_rep_ts = rep_ts / scale
-            ren_img_rep, ren_prob_mask_rep, _, _ = self.render(
-                rep_rs, ms_rep_ts, seq_name, rep_K
+            # images by rendering inf-poses
+            inf_ren_dict = self.render(
+                best_inf_r,
+                best_inf_t / scale,
+                cur_models[best_inf_idx],
+                Ks=cam_K[best_inf_idx].unsqueeze(0),
+            )  # colored img is in bgr-form
+            img_inf = rearrange(
+                inf_ren_dict["color"][..., [2, 1, 0]], "b h w c -> b c h w"
+            ).repeat(batch_size - 1, 1, 1, 1)
+            mask_inf = rearrange(inf_ren_dict["prob"], "b h w -> b 1 h w").repeat(
+                batch_size - 1, 1, 1, 1
             )
-            mask_rep = ren_prob_mask_rep.squeeze(3)
-            img_rep = ren_img_rep.permute(0, 3, 1, 2)
+
+            # images by rendering repj-poses
+            ms_rep_ts = rep_ts / scale
+            rep_ren_dict = self.render(
+                rep_rs,
+                ms_rep_ts / scale,
+                rep_models,
+                Ks=rep_K,
+            )
+            img_rep = rearrange(
+                rep_ren_dict["color"][..., [2, 1, 0]], "b h w c -> b c h w"
+            )
+            mask_rep = rearrange(rep_ren_dict["prob"], "b h w -> b 1 h w")
 
             name_in_loss_dict = "mask iou {}".format(scale_name)
-            loss_dict[name_in_loss_dict], this_valid_miou = self.mask_iou_loss(
-                mask_inf, mask_rep
-            ) * self.weights.MIOU
-            valid_miou_nums.update(
-                {
-                    scale_name: int(sum(this_valid_miou)),
-                }
+            loss_dict[name_in_loss_dict], this_valid_miou = (
+                self.mask_iou_loss(mask_inf, mask_rep) * self.weights.MIOU
             )
-            valid_mious.append(this_valid_miou)
 
             # ===== MS SSIM =====
             name_in_loss_dict = "ms ssim {}".format(scale_name)
@@ -259,7 +241,9 @@ class RepjRefiner(nn.Module):
                 self.pm_loss(
                     inf_rs,
                     rep_rs,
-                    self.models[seq_name]["vertices"].repeat(rep_poses.shape[0], 1, 1),
+                    cur_models[best_inf_idx]["vertices"].repeat(
+                        rep_poses.shape[0], 1, 1
+                    ),
                     inf_ts.squeeze(2),
                     rep_ts.squeeze(2),
                     sym_infos=sym_infos,
@@ -270,101 +254,62 @@ class RepjRefiner(nn.Module):
 
         # ==================== 3D-2D GIOU loss ====================
         # region 3d2d-giou
-        bboxes_rep_3d2d = self._get_boxes_from_rt(rep_rs, rep_ts, seq_name, rep_K)
-        bboxes_inf_3d2d = self._get_boxes_from_rt(inf_rs, inf_ts, seq_name, inf_K)
+        bboxes_rep_3d2d = self._get_boxes_from_rt(rep_rs, rep_ts, roi_cls_id, rep_K)
+        bboxes_inf_3d2d = self._get_boxes_from_rt(inf_rs, inf_ts, roi_cls_id, inf_K)
         loss_dict["3d2d iou"] = (
             self.bbox_iou_loss(bboxes_inf_3d2d, bboxes_rep_3d2d) * 0.1
         ) * self.weights.IOU2D3D
         # endregion
 
         # ==================== Outputs & Record ====================
-        # assert all(x.requires_grad for x in loss_dict.values()), 'Not all the losses are requiring grad!'
         # region SaveSomething
-        record_dict["seq name"] = seq_name
-        record_dict["valid_miou_nums"] = valid_miou_nums
+        record_dict["seq name"] = self.obj_names[roi_cls_id]
 
         record_dict["rep r"] = rep_rs.tolist()
         record_dict["rep t"] = rep_ts.tolist()
-        record_dict["inf r"] = inf_r.tolist()
-        record_dict["inf t"] = inf_t.tolist()
+        record_dict["inf r"] = inf_rot.tolist()
+        record_dict["inf t"] = inf_trans.tolist()
         record_dict["gt r"] = gt_r.tolist()
         record_dict["gt t"] = gt_t.tolist()
 
-        out_dict["rgt"] = self.criterion_r(gt_r, inf_r).item() / batch_size
-        out_dict["tgt"] = self.criterion_t(gt_t, inf_t).item() / batch_size
-        out_dict["rrep"] = self.criterion_r(rep_rs, inf_rs).item() / rep_rs.shape[0]
-        out_dict["trep"] = self.criterion_t(rep_ts, inf_ts).item() / rep_ts.shape[0]
+        '''
+        # gt errors should be already computed in GDRN
+        r_error_gt, t_error_gt = compute_mean_re_te(inf_trans, inf_rot, gt_t, gt_r)
+        vis_dict["r_error_gt"] = float(r_error_gt)
+        vis_dict["t_error_gt"] = float(t_error_gt)
+        '''
+        r_error_rp, t_error_rp = compute_mean_re_te(inf_ts, inf_rs, rep_ts, rep_rs)
+        vis_dict["r_error_rp"] = float(r_error_rp)
+        vis_dict["t_error_rp"] = float(t_error_rp)
 
-        sym = ori_batch["sym_info"][0] is not None
-        out_dict["add_rep"] = self._make_add(
+        sym = sym_infos[0] is not None
+        vis_dict["add_rp"] = self._make_add(
             inf_rs.cpu(),
             inf_ts.cpu(),
             rep_rs.cpu().detach(),
             rep_ts.cpu().detach(),
-            seq_name,
-            sym,
+            model_vertices=cur_models[0]["vertices"][0],
+            diameter=self.raw_models_info[roi_cls_id],
+            sym=sym,
         ).mean()
-        out_dict["add_gt"] = self._make_add(
-            inf_r.cpu().detach(),
-            inf_t.cpu().detach(),
+        vis_dict["add_gt"] = self._make_add(
+            inf_rot.cpu().detach(),
+            inf_trans.cpu().detach(),
             gt_r.cpu(),
             gt_t.cpu(),
-            seq_name,
-            sym,
+            model_vertices=cur_models[0]["vertices"][0],
+            diameter=self.raw_models_info[roi_cls_id],
+            sym=sym,
         ).mean()
+
+        storage = get_event_storage()
+        storage.put_scalars(**vis_dict)
         # endregion
 
-        return out_dict, loss_dict, record_dict
+        return vis_dict, loss_dict, record_dict
 
-    def zero_grad(self, set_to_none: bool = False) -> None:
-        super().zero_grad()
-        self.ren.zero_grad()
-
-    """
-    def fetch_all_models(self, dir: str):
-        pkl_name = "models_loaded_ply.pkl"
-        pkl_dir = osp.join(dir, pkl_name)
-        if osp.exists(pkl_dir):
-            with open(pkl_dir, "br") as f:
-                pkl = pickle.load(f)
-            return pkl
-        logger.info("Fetching all models from: {}".format(dir))
-        _d = {}
-        for name in LM_13_OBJECTS:
-            _id = SEQ_DICT[name]
-            _d[name] = load_plys(
-                ply_paths=osp.join(dir, "obj_{}.ply".format(str(_id).zfill(6))),
-                device=self.device,
-            )[0]
-        with open(pkl_dir, "bw") as f:
-            pickle.dump(_d, f)
-        return _d
-
-    def fetch_model_infos(self, dir: str):
-        json_name = "models_info.json"
-        json_dir = osp.join(dir, json_name)
-        assert osp.exists(json_dir), json_dir
-        logger.info("Fetching all models_info from: {}".format(dir))
-        with open(json_dir, "r") as f:
-            info = json.load(f)
-        _d = {}
-        for name in LM_13_OBJECTS:
-            _id = str(SEQ_DICT[name])
-            _d[name] = {
-                "diameter": info[_id]["diameter"] / 1000,
-                "min_x": info[_id]["min_x"] / 1000,
-                "min_y": info[_id]["min_y"] / 1000,
-                "min_z": info[_id]["min_z"] / 1000,
-                "size_x": info[_id]["size_x"] / 1000,
-                "size_y": info[_id]["size_y"] / 1000,
-                "size_z": info[_id]["size_z"] / 1000,
-            }
-        return _d
-    """
-
-    def _make_add(self, inf_r, inf_t, gt_r, gt_t, model_name, sym):
-        model = self.models[model_name]["vertices"][0].cpu()
-        diameter = self.raw_models_info[model_name]["diameter"]
+    def _make_add(self, inf_r, inf_t, gt_r, gt_t, model_vertices, diameter, sym):
+        model = model_vertices.cpu()
         add_func = adi if sym else add
 
         bs = inf_r.shape[0]
@@ -417,35 +362,24 @@ class RepjRefiner(nn.Module):
         assert model_3dbbox.shape == (1, 3, 8)
         return model_3dbbox.to(self.device)
 
-    def _back_proj(self, points3d: torch.Tensor, K: torch.Tensor):
-        """
-
-        @param points3d: n*3*8
-        @param K: n*3*3
-        @return: n*3*8
-        """
-        assert points3d.ndim == 3 and points3d.shape[1] == 3
-        z = points3d[:, 2, None]
-        return torch.bmm(K, points3d) / z
-
     def _get_loss_weight(self, cfg):
-        return cfg.REFINER.REFINER_LW
+        return cfg.REPJ_REFINE.REPJ_REFINER_LW
 
     def _get_boxes_from_rt(
-        self, r: torch.Tensor, t: torch.Tensor, seq_name, K: torch.Tensor
+        self, r: torch.Tensor, t: torch.Tensor, cls_id, K: torch.Tensor
     ):
         """
 
         @param r: n*3*3
         @param t: n*3*1
-        @param seq_name: str
+        @param cls_id: int
         @param K: n*3*3
         @return: n*4
         """
         b = r.shape[0]
         assert r.shape == (b, 3, 3) and t.shape == (b, 3, 1)
         assert r.device == t.device
-        bbox_3d = r @ self.models_info[seq_name] + t  # n*3*8
+        bbox_3d = r @ self.models_info[cls_id] + t  # n*3*8
         bbox_2d = self._back_proj(bbox_3d, K)  # n*3*8
 
         bbox_2d_x, bbox_2d_y = bbox_2d[:, 0, :], bbox_2d[:, 1, :]
@@ -455,19 +389,6 @@ class RepjRefiner(nn.Module):
         ymax = bbox_2d_y.max(dim=1, keepdim=True).values
 
         return torch.cat((xmin, ymin, xmax, ymax), dim=1)
-
-    def rendering_name_str(self, ptype="inf", itype="rgb", mtype="batch", scale=1):
-        """
-        @param ptype: producing type 'inf' | 'repj'
-        @param itype: image type 'rgb' | 'pmsk' | 'msk' | 'dpt'
-        @param mtype: multiplication type 'batch' | 'multi'
-        @param scale: int 1/2/4
-        @return: a name string
-        """
-        if ptype in {"repj", "inf"}:
-            return "{it}_{t}_{m}_scale{sc}".format(it=itype, t=ptype, m=mtype, sc=scale)
-        else:
-            raise ValueError(ptype)
 
     def crop_resize_tensor(
         self, m: torch.Tensor, center: torch.Tensor, wh: torch.Tensor, out_size=(64, 64)
@@ -505,3 +426,20 @@ def _bgr2rgb(img: torch.Tensor):
     g = img[:, 1:2, :, :]
     r = img[:, 2:, :, :]
     return torch.cat((r, g, b), dim=1)
+
+
+def build_repj_refiner(
+    cfg, renderer, render_models, data_ref, train_objs
+) -> RepjRefiner:
+    # get model_info
+    all_model_infos = data_ref.get_models_info()
+    models_info = [
+        all_model_infos[str(data_ref.obj2id[obj_name])] for obj_name in train_objs
+    ]
+    return RepjRefiner(
+        cfg=cfg,
+        render=renderer,
+        models=render_models,
+        models_info=models_info,
+        train_obj_names=train_objs,
+    )

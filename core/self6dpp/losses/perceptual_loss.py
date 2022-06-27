@@ -2,6 +2,18 @@
 from external.PerceptualSimilarity.models import dist_model
 
 
+def Singleton(cls):
+    _instance = {}
+
+    def _singleton(*args, **kargs):
+        if cls not in _instance:
+            _instance[cls] = cls(*args, **kargs)
+        return _instance[cls]
+
+    return _singleton
+
+
+@Singleton
 class PerceptualLoss(object):
     def __init__(self, model="net", net="alex", use_gpu=True):
         # print('Setting up Perceptual loss..')

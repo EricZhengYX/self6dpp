@@ -50,6 +50,11 @@ from core.self6dpp.losses.ssim import SSIM, MS_SSIM
 from core.self6dpp.losses.vf_norm_loss import VFLoss, NORMLoss
 from core.self6dpp.losses.perceptual_loss import PerceptualLoss
 
+from core.self6dpp.models.weakly_sup.reprojection_refiner import (
+    build_repj_refiner,
+    RepjRefiner,
+)
+
 from .gdrn_engine_utils import batch_data, get_out_coor, get_out_mask
 from .self_engine_utils import batch_data_self, compute_self_loss
 from .gdrn_evaluator import (
@@ -59,7 +64,6 @@ from .gdrn_evaluator import (
 )
 from .gdrn_custom_evaluator import GDRN_EvaluatorCustom
 import ref
-
 
 logger = logging.getLogger(__name__)
 
@@ -211,9 +215,10 @@ def do_train(
     model,
     optimizer,
     model_teacher=None,
+    repj_refine: RepjRefiner = None,
     refiner=None,
     ref_cfg=None,
-    renderer=None,
+    renderer_func=None,
     ren_models=None,
     resume=False,
 ):
@@ -223,6 +228,11 @@ def do_train(
     model_teacher.eval()
     if refiner is not None:
         refiner.eval()
+    if repj_refine is not None:
+        logger.warning("Also Weakly-supervised!")
+        do_weakly = True
+    else:
+        do_weakly = False
 
     # some basic settings =========================
     dataset_meta = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
@@ -355,13 +365,13 @@ def do_train(
     )
     tbx_writer = tbx_event_writer._writer  # NOTE: we want to write some non-scalar data
     writers = (
-        [
-            MyCommonMetricPrinter(max_iter, eval_period, ckpt_period),
-            MyJSONWriter(osp.join(cfg.OUTPUT_DIR, "metrics.json")),
-            tbx_event_writer,
-        ]
+        {
+            "terminal": MyCommonMetricPrinter(max_iter, eval_period, ckpt_period),
+            "json": MyJSONWriter(osp.join(cfg.OUTPUT_DIR, "metrics.json")),
+            "tbx": tbx_event_writer,
+        }
         if comm.is_main_process()
-        else []
+        else dict()
     )
 
     if cfg.TRAIN.DEBUG_SINGLE_IM:
@@ -373,12 +383,6 @@ def do_train(
         gt_pose = gt_dict["annotations"][0]["pose"]
 
         debug_results = {}
-
-    # record which samples are used in each iteration
-    record_samples = cfg.TRAIN.get("RECORD_TRAIN_SAMPLE_ID", False)
-    if record_samples:
-        logger.info("Samples used during the training will be recorded.")
-        sample_ids_dict = {}
 
     # compared to "train_net.py", we do not support accurate timing and
     # precise BN here, because they are not trivial to implement
@@ -404,22 +408,23 @@ def do_train(
 
             do_syn_sup = False
             do_self = False
-            this_iter_data_mode = ""  # 'pose' | 'geo'
+            this_iter_forward_mode = ""  # 'pose' | 'geo'
             if np.random.rand() < train_2_ratio:  # synthetic supervised
                 data_loader_2.dataset.step()
                 data = next(data_loader_2_iter)
                 do_syn_sup = True
-                this_iter_data_mode = data_loader_2.dataset.get_current_output_mode()
+                this_iter_forward_mode = data_loader_2.dataset.get_current_output_mode()
             else:
                 data_loader.dataset.step()
                 data = next(data_loader_iter)
                 do_self = True
-                this_iter_data_mode = data_loader.dataset.get_current_output_mode()
+                this_iter_forward_mode = data_loader.dataset.get_current_output_mode()
 
-            if record_samples:
-                sample_ids_dict[iteration] = [d['scene_im_id'] for d in data]
-
-            storage.put_scalar("forward_mode", 0 if this_iter_data_mode == "pose" else 1, smoothing_hint=False)
+            storage.put_scalar(
+                "forward_mode",
+                0 if this_iter_forward_mode == "pose" else 1,
+                smoothing_hint=False,
+            )
 
             if iter_time is not None:
                 storage.put_scalar("time", time.perf_counter() - iter_time)
@@ -429,13 +434,14 @@ def do_train(
             # ------------------------------------------------------------------
             # forward
             # ------------------------------------------------------------------
+            ws_loss_dict = dict()
             if do_syn_sup:  # (synthetic supervised batch)
                 # NOTE: use offline xyz labels (DIBR rendered xyz is not very accurate)
                 assert (
                     net_cfg.XYZ_ONLINE is False
                 ), "Use offline xyz labels for self-supervised training!"
                 batch = batch_data(cfg, data, renderer=None)
-                out_dict, loss_dict = model(
+                out_dict, syn_loss_dict = model(
                     batch["roi_img"],
                     gt_xyz=batch.get("roi_xyz", None),
                     gt_xyz_bin=batch.get("roi_xyz_bin", None),
@@ -458,20 +464,21 @@ def do_train(
                     roi_extents=batch.get("roi_extent", None),
                     do_loss=True,
                 )
-                losses = sum(loss_dict.values())
-                assert torch.isfinite(losses).all(), loss_dict
+                syn_losses = sum(syn_loss_dict.values())
+                assert torch.isfinite(syn_losses).all(), syn_loss_dict
 
                 loss_dict_reduced = {
-                    k: v.item() for k, v in comm.reduce_dict(loss_dict).items()
+                    k: v.item() for k, v in comm.reduce_dict(syn_loss_dict).items()
                 }
                 losses_reduced = sum(loss for loss in loss_dict_reduced.values())
                 if comm.is_main_process():
                     storage.put_scalars(total_loss=losses_reduced, **loss_dict_reduced)
+                losses = syn_losses
             elif do_self:
                 batch = batch_data_self(
                     cfg,
                     data,
-                    loss_mode=this_iter_data_mode,
+                    loss_mode=this_iter_forward_mode,
                     model_teacher=model_teacher,
                 )
                 # only outputs, no losses
@@ -486,11 +493,11 @@ def do_train(
                     roi_whs=batch.get("roi_wh"),
                     roi_extents=batch.get("roi_extent"),
                     resize_ratios=batch.get("resize_ratio"),
-                    forward_mode=this_iter_data_mode,
+                    forward_mode=this_iter_forward_mode,
                 )
                 # compute self-supervised losses
 
-                loss_dict = compute_self_loss(
+                self_loss_dict = compute_self_loss(
                     cfg,
                     batch,
                     pred_rot=out_dict.get("rot", None),
@@ -505,9 +512,9 @@ def do_train(
                     pred_full_vf=out_dict["full_vf"],
                     pred_vis_norm=out_dict["vis_norm"],
                     pred_full_norm=out_dict["full_norm"],
-                    ren=renderer,
+                    ren_func=renderer_func,
                     ren_models=ren_models,
-                    loss_mode=this_iter_data_mode,
+                    loss_mode=this_iter_forward_mode,
                     vf_loss_func=vf_loss_func,
                     norm_loss_func=norm_loss_func,
                     ssim_func=ssim_func,
@@ -516,23 +523,48 @@ def do_train(
                     tb_writer=tbx_writer if is_log_iter else None,
                     iteration=iteration if is_log_iter else None,
                 )
+                '''
                 finite_loss_dict = {
-                    k: v for k, v in loss_dict.items() if torch.isfinite(v)
+                    k: v for k, v in self_loss_dict.items() if torch.isfinite(v)
                 }
                 assert len(finite_loss_dict) > 0, finite_loss_dict
-                if len(finite_loss_dict) < len(loss_dict):
-                    failed_names = [k for k, v in loss_dict.items() if not torch.isfinite(v)]
+                if len(finite_loss_dict) < len(self_loss_dict):
+                    failed_names = [
+                        k for k, v in self_loss_dict.items() if not torch.isfinite(v)
+                    ]
                     warn_msg = "following item(s) encountered NaN in iter{it}:\n{items}".format(
-                        it=iteration,
-                        items="\n".join(failed_names)
+                        it=iteration, items="\n".join(failed_names)
                     )
                     logger.warning(warn_msg)
-                losses = sum(loss_dict.values())
+                '''
+                self_losses = sum(self_loss_dict.values())
+                assert torch.isfinite(self_losses).all(), self_loss_dict
 
                 loss_dict_reduced = {
-                    k: v.item() for k, v in comm.reduce_dict(loss_dict).items()
+                    k: v.item() for k, v in comm.reduce_dict(self_loss_dict).items()
                 }
                 losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+
+                # if needed, make weakly-supervised as well
+                if do_weakly and this_iter_forward_mode == "pose":
+                    ws_vis_dict, ws_loss_dict, ws_record_dict = repj_refine.forward(
+                        gt_pose=batch["gt_pose_bx3x4"],
+                        inf_rot=out_dict["rot"],
+                        inf_trans=out_dict["trans"],
+                        inf_full_masks=out_dict["full_mask_prob"],
+                        inf_vis_masks=out_dict["vis_mask_prob"],
+                        roi_cls=batch["roi_cls"],
+                        roi_centers=batch["roi_center"],
+                        roi_whs=batch["roi_wh"],
+                        cam_K=batch["roi_cam"],
+                        sym_infos=None,
+                    )
+                    weakly_losses = sum(ws_loss_dict.values())
+                    assert torch.isfinite(weakly_losses).all(), ws_loss_dict
+                else:
+                    weakly_losses = 0
+                losses = self_losses + weakly_losses
+                '''
                 if comm.is_main_process():
                     storage.put_scalars(
                         total_loss_self=losses_reduced, **loss_dict_reduced
@@ -562,6 +594,7 @@ def do_train(
                             t_error_self=t_error,
                             add_error_self=add_error,
                         )
+                '''
             else:
                 raise RuntimeError("Not in do_self or do_syn_sup")
             # endregion
@@ -586,7 +619,9 @@ def do_train(
                 total_norm = nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=clip_grad
                 )
-                storage.put_scalar("total_grad_norm", float(total_norm), smoothing_hint=False)
+                storage.put_scalar(
+                    "total_grad_norm", float(total_norm), smoothing_hint=False
+                )
                 optimizer.step()
 
             if iteration % accumulate_iter == 0:
@@ -597,19 +632,36 @@ def do_train(
                 scheduler.step()
             # endregion
 
-            # region recording
+            # region tbx-recording
             # ------------------------------------------------------------------
             # recording losses&norm
             # ------------------------------------------------------------------
-            # losses
-            tbx_writer.add_scalar("Losses/SUM", float(losses.item()), iteration)
-            for name, value in loss_dict.items():
-                loss_name = "Losses/{}".format(name)
-                loss_val = float(value)
-                tbx_writer.add_scalar(loss_name, loss_val, iteration)
-            # grad-norm
+            # record losses
+            if do_syn_sup:
+                tbx_writer.add_scalar("SynLosses/SUM", float(losses.item()), iteration)
+                for name, value in syn_loss_dict.items():
+                    loss_name = "SelfLosses/{}".format(name)
+                    loss_val = float(value)
+                    tbx_writer.add_scalar(loss_name, loss_val, iteration)
+            elif do_self:
+                tbx_writer.add_scalar("SelfLosses/SUM", float(self_losses.item()), iteration)
+                for name, value in self_loss_dict.items():
+                    loss_name = "SelfLosses/{}".format(name)
+                    loss_val = float(value)
+                    tbx_writer.add_scalar(loss_name, loss_val, iteration)
+                if do_weakly:
+                    tbx_writer.add_scalar("WeaklyLosses/SUM", float(weakly_losses.item()), iteration)
+                    for name, value in ws_loss_dict.items():
+                        loss_name = "WeaklyLosses/{}".format(name)
+                        loss_val = float(value)
+                        tbx_writer.add_scalar(loss_name, loss_val, iteration)
+            else:
+                raise RuntimeError("Not in do_self or do_syn_sup")
+            # record grad-norm
             tbx_writer.add_scalar("Grad/total_norm", float(total_norm), iteration)
+            # endregion
 
+            # region EMA
             # ------------------------------------------------------------------
             # update teacher model using ema
             # ------------------------------------------------------------------
@@ -619,7 +671,9 @@ def do_train(
             ):
                 ema.update(model)
                 ema.update_attr(model)
+            # endregion
 
+            # region periodically eval
             # ------------------------------------------------------------------
             # do test periodically or after training
             # ------------------------------------------------------------------
@@ -638,13 +692,16 @@ def do_train(
                 torch.save(model.state_dict(), "student_{}.pth".format(epoch))
                 # Compared to "train_net.py", the test results are not dumped to EventStorage
                 comm.synchronize()
+            # endregion
 
+            # region others
             # ------------------------------------------------------------------
             # some visualization
             # ------------------------------------------------------------------
             if is_log_iter:
-                for writer in writers:
-                    writer.write()
+                if len(writers) > 0:
+                    writers["terminal"].write()
+                    writers["tbx"].write()
                 # visualize some images ========================================
                 if cfg.TRAIN.VIS_IMG:
                     with torch.no_grad():
@@ -679,12 +736,12 @@ def do_train(
 
                         gt_mask_vis = batch["roi_mask"][vis_i].detach().cpu().numpy()
                         tbx_writer.add_image("gt_mask", gt_mask_vis, iteration)
-            # endregion
 
             # ------------------------------------------------------------------
             # checkpointer step
             # ------------------------------------------------------------------
             periodic_checkpointer.step(iteration, epoch=epoch)
+            # endregion
 
         if cfg.TRAIN.DEBUG_SINGLE_IM:
             mmcv.dump(
@@ -693,8 +750,6 @@ def do_train(
                     cfg.OUTPUT_DIR, "debug_results_{}.pkl".format(train_dset_names[0])
                 ),
             )
-    if record_samples:
-        mmcv.dump(sample_ids_dict, "sample_ids_dict.json")
 
 
 def vis_train_data(data, obj_names, cfg):
@@ -744,14 +799,14 @@ def vis_train_data(data, obj_names, cfg):
         # yapf: disable
         vis_imgs = [
             full_img_vis[:, :, [2, 1, 0]], full_img_bbox[:, :, [2, 1, 0]], roi_img[:, :, [2, 1, 0]],
-            roi_mask_trunc * erode_mask_obj, roi_mask_visib*erode_mask_obj, roi_mask_obj*erode_mask_obj,
+            roi_mask_trunc * erode_mask_obj, roi_mask_visib * erode_mask_obj, roi_mask_obj * erode_mask_obj,
             roi_xyz_show,
             coord2d_3,
             coord2d[:, :, 0], coord2d[:, :, 1]
         ]
         titles = [
             "full_img", "ori_bbox", f"roi_img({obj_name})",
-            "roi_mask_trunc",  "roi_mask_visib", "roi_mask_obj",
+            "roi_mask_trunc", "roi_mask_visib", "roi_mask_obj",
             "roi_xyz",
             "roi_coord2d",
             "roi_coord2d_x", "roi_coord2d_y"
@@ -766,17 +821,18 @@ def vis_train_data(data, obj_names, cfg):
                 #     continue
                 if region_id in roi_region:
                     for _c in range(3):
-                        roi_region_3[:, :, _c][roi_region == region_id] = roi_xyz_show[:, :, _c][roi_region == region_id].mean()
-            roi_region_3 = roi_region_3  * erode_mask_obj[:, :, None].astype("float32")
+                        roi_region_3[:, :, _c][roi_region == region_id] = roi_xyz_show[:, :, _c][
+                            roi_region == region_id].mean()
+            roi_region_3 = roi_region_3 * erode_mask_obj[:, :, None].astype("float32")
             vis_imgs.append(roi_region_3)
             titles.append("roi_region")
         if len(vis_imgs) > row * col:
             col += 1
         for _im, _name in zip(vis_imgs, titles):
-            save_path = osp.join(cfg.OUTPUT_DIR, "vis", _name+'.png')
+            save_path = osp.join(cfg.OUTPUT_DIR, "vis", _name + '.png')
             mmcv.mkdir_or_exist(osp.dirname(save_path))
             if _im.shape[-1] == 3:
-                _im = _im[:, :, [2,1,0]]
+                _im = _im[:, :, [2, 1, 0]]
             if _im.max() < 1.1:
                 _im = (_im * 255).astype("uint8")
             print(save_path)

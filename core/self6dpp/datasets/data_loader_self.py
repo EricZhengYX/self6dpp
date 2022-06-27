@@ -952,3 +952,33 @@ def build_gdrn_self_train_loader(cfg, dataset_names, train_objs=None):
         aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
         num_workers=cfg.DATALOADER.NUM_WORKERS,
     )
+
+
+# def get_sampler_pool(self):
+#     dataset_dicts_filters = [
+#         filter(
+#             lambda x, ii=i: x[1]["inst_infos"]["category_id"] == ii,
+#             # ii=i is necessary here, search 'late binding' for reference.
+#             enumerate(self._lst),
+#         )
+#         for i in self.selected_seq
+#     ]
+#
+#     def lm13_get_pose(d: dict):
+#         pose = torch.tensor(d["inst_infos"]["pose"]).unsqueeze(0)
+#         return lie_algebra.affine_to_se3(pose)
+#
+#     # TODO: when using other datasets, ways to extracting pose may be different
+#     _get_pose = lm13_get_pose
+#
+#     sampler_pool = {}
+#     for i, this_filter in zip(self.selected_seq, dataset_dicts_filters):
+#         if self.use_d_inverse_sampler:
+#             sampler_pool[i] = InfiniteSubsetRandomSamplerDistanceInverse(
+#                 [(idx, _get_pose(data)) for idx, data in this_filter]
+#             )
+#         else:
+#             sampler_pool[i] = InfiniteSubsetRandomSampler(
+#                 [idx for idx, _ in this_filter]
+#             )
+#     return sampler_pool

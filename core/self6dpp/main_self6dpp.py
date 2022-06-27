@@ -43,6 +43,7 @@ from core.self6dpp.engine.self_engine_utils import (
     get_DIBR_models_renderer,
     get_dibr_models_renderer,
     my_get_DIBR_models_renderer,
+    assign_renderer_function,
 )
 from core.self6dpp.engine.self_engine import do_test, do_train, do_save_results
 
@@ -52,7 +53,8 @@ from core.self6dpp.models import (
     GDRN_double_mask_double_vf,
     GDRN_MaskNormVF,
 )
-from core.self6dpp.models import DeepIM_FlowNet  # noqa
+from core.self6dpp.models import DeepIM_FlowNet
+from core.self6dpp.models.weakly_sup.reprojection_refiner import build_repj_refiner
 
 
 logger = logging.getLogger("detectron2")
@@ -171,10 +173,11 @@ def main(args):
 
     distributed = comm.get_world_size() > 1
 
-    # get renderer (DIBR) ----------------------
+    # region get renderer (DIBR) ----------------------
     if args.eval_only or cfg.TEST.SAVE_RESULTS_ONLY:
         ren_models = None
         ren = None
+        ren_func = None
     else:
         train_dset_meta = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
         data_ref = ref.__dict__[train_dset_meta.ref_key]
@@ -195,7 +198,10 @@ def main(args):
             )
         else:
             raise ValueError("Unknown differentiable renderer type")
+        ren_func = assign_renderer_function(cfg, renderer=ren)
+    # endregion
 
+    # region build model&optimizer
     logger.info(f"Used GDRN module name: {cfg.MODEL.POSE_NET.NAME}")
     if cfg.MODEL.POSE_NET.NAME == "GDRN_MaskNormVF":
         model, optimizer = GDRN_MaskNormVF.build_model_optimizer(
@@ -206,7 +212,9 @@ def main(args):
             cfg, is_test=args.eval_only
         )
     logger.info("Model:\n{}".format(model))
+    # endregion
 
+    # region if not training, return now
     if cfg.TEST.SAVE_RESULTS_ONLY:  # save results only ------------------------------
         MyCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
             cfg.MODEL.WEIGHTS, resume=args.resume
@@ -218,7 +226,9 @@ def main(args):
             cfg.MODEL.WEIGHTS, resume=args.resume
         )
         return do_test(cfg, model)
+    # endregion
 
+    # region teacher/DeepIM/RepjRefine
     model_teacher, _ = eval(cfg.MODEL.POSE_NET.NAME).build_model_optimizer(
         cfg, is_test=True
     )
@@ -234,6 +244,19 @@ def main(args):
         ref_cfg = None
         refiner = None
 
+    if cfg.REPJ_REFINE.ENABLE:
+        repj_refine = build_repj_refiner(
+            cfg,
+            renderer=ren_func,
+            render_models=ren_models,
+            data_ref=data_ref,
+            train_objs=train_obj_names,
+        )
+    else:
+        repj_refine = None
+    # endregion
+
+    # region distribute launcher
     if distributed and args.launcher not in ["hvd"]:
         model = DistributedDataParallel(
             model,
@@ -254,16 +277,18 @@ def main(args):
                 broadcast_buffers=False,
                 find_unused_parameters=True,
             )
+    # endregion
 
     do_train(
         cfg,
         args,
         model,
         model_teacher=model_teacher,
+        repj_refine=repj_refine,
         refiner=refiner,
         ref_cfg=ref_cfg,
         optimizer=optimizer,
-        renderer=ren,
+        renderer_func=ren_func,
         ren_models=ren_models,
         resume=args.resume,
     )
