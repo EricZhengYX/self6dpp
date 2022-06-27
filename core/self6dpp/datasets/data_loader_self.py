@@ -18,6 +18,7 @@ from detectron2.utils.logger import log_first_n
 from detectron2.data import get_detection_dataset_dicts
 
 from core.base_data_loader import Base_DatasetFromList
+from core.utils import quaternion_lf, lie_algebra
 from core.utils.data_utils import (
     crop_resize_by_warp_affine,
     get_2d_coord_np,
@@ -30,11 +31,14 @@ from core.utils.dataset_utils import (
     flat_dataset_dicts,
     my_build_batch_data_loader,
     trivial_batch_collator,
+    build_batch_separated_data_loader,
 )
 from core.utils.my_distributed_sampler import (
     InferenceSampler,
     RepeatFactorTrainingSampler,
     TrainingSampler,
+    InfiniteSubsetRandomSampler,
+    InfiniteSubsetRandomSamplerDistanceInverse,
 )
 
 from lib.pysixd import inout, misc
@@ -158,7 +162,11 @@ class GDRN_Self_DatasetFromList(Base_DatasetFromList):
         self.sym_infos = {}
         # ----------------------------------------------------
         self.flatten = flatten
-        self._lst = flat_dataset_dicts(lst) if flatten else lst
+        if flatten:
+            self._lst = self.flat_ds = flat_dataset_dicts(lst) if flatten else lst
+        else:
+            self._lst = lst
+            self.flat_ds = None
         # ----------------------------------------------------
         self._copy = copy
         self._serialize = serialize
@@ -931,7 +939,6 @@ def build_gdrn_self_train_loader(cfg, dataset_names, train_objs=None):
     )
 
     sampler_name = cfg.DATALOADER.SAMPLER_TRAIN
-    logger = logging.getLogger(__name__)
     logger.info("Using training sampler {}".format(sampler_name))
     # TODO avoid if-else?
     if sampler_name == "TrainingSampler":
@@ -945,40 +952,42 @@ def build_gdrn_self_train_loader(cfg, dataset_names, train_objs=None):
         sampler = RepeatFactorTrainingSampler(repeat_factors)
     else:
         raise ValueError("Unknown training sampler: {}".format(sampler_name))
-    return my_build_batch_data_loader(
-        dataset,
-        sampler,
-        cfg.SOLVER.IMS_PER_BATCH,
-        aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
-        num_workers=cfg.DATALOADER.NUM_WORKERS,
-    )
 
+    if cfg.REPJ_REFINE.ENABLE:
+        filters_pool = [
+            filter(
+                lambda i, obj_id=_obj_id: dataset.flat_ds[i]['inst_infos']['category_id'] == obj_id,
+                # obj_id=_obj_id is necessary here, search 'late binding' for reference.
+                range(len(dataset)),
+            )
+            for _obj_id, name in enumerate(train_objs)
+        ]
 
-# def get_sampler_pool(self):
-#     dataset_dicts_filters = [
-#         filter(
-#             lambda x, ii=i: x[1]["inst_infos"]["category_id"] == ii,
-#             # ii=i is necessary here, search 'late binding' for reference.
-#             enumerate(self._lst),
-#         )
-#         for i in self.selected_seq
-#     ]
-#
-#     def lm13_get_pose(d: dict):
-#         pose = torch.tensor(d["inst_infos"]["pose"]).unsqueeze(0)
-#         return lie_algebra.affine_to_se3(pose)
-#
-#     # TODO: when using other datasets, ways to extracting pose may be different
-#     _get_pose = lm13_get_pose
-#
-#     sampler_pool = {}
-#     for i, this_filter in zip(self.selected_seq, dataset_dicts_filters):
-#         if self.use_d_inverse_sampler:
-#             sampler_pool[i] = InfiniteSubsetRandomSamplerDistanceInverse(
-#                 [(idx, _get_pose(data)) for idx, data in this_filter]
-#             )
-#         else:
-#             sampler_pool[i] = InfiniteSubsetRandomSampler(
-#                 [idx for idx, _ in this_filter]
-#             )
-#     return sampler_pool
+        pose_label = cfg.REPJ_REFINE.DISTANCE_INVERSE_SAMPLER.PSEUDO_POSE_TYPE
+        _all_rot = torch.tensor([
+            dataset.flat_ds[i]['inst_infos'][pose_label] for i in range(len(dataset))
+        ])[:, :3, :3].contiguous()
+        _all_so3 = lie_algebra.rot_to_lie_vec(_all_rot).cpu().numpy()
+
+        sampler_pool = {}
+        for obj_name, this_filter in zip(train_objs, filters_pool):
+            if cfg.REPJ_REFINE.DISTANCE_INVERSE_SAMPLER.ENABLE:
+                sampler_pool[obj_name] = InfiniteSubsetRandomSamplerDistanceInverse(
+                    [(idx, _all_so3[idx]) for idx in this_filter]
+                )
+            else:
+                sampler_pool[obj_name] = InfiniteSubsetRandomSampler(list(this_filter))
+        return build_batch_separated_data_loader(
+            dataset,
+            sampler_pool,
+            cfg.SOLVER.IMS_PER_BATCH,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+        )
+    else:
+        return my_build_batch_data_loader(
+            dataset,
+            sampler,
+            cfg.SOLVER.IMS_PER_BATCH,
+            aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
+            num_workers=cfg.DATALOADER.NUM_WORKERS,
+        )

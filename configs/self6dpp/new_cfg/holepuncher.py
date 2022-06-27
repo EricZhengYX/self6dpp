@@ -280,5 +280,9 @@ REPJ_REFINE = dict(
     ),
     RENDERER=dict(
         SHRINK=1,
+    ),
+    DISTANCE_INVERSE_SAMPLER=dict(
+        ENABLE=True,
+        PSEUDO_POSE_TYPE="pose_refine",  # pose_est | pose_refine
     )
 )

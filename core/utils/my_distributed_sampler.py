@@ -2,11 +2,16 @@
 # modified from detectron2
 import itertools
 import math
+import random
 from collections import defaultdict
 from typing import Optional
+import numpy as np
+from scipy.spatial import KDTree
 import torch
+import torch.nn.functional as F
 from torch.utils.data.sampler import Sampler
 from . import my_comm as comm
+from typing import *
 
 
 class TrainingSampler(Sampler):
@@ -198,3 +203,104 @@ class InferenceSampler(Sampler):
 
     def __len__(self):
         return len(self._local_indices)
+
+
+class InfiniteSubsetRandomSampler(Sampler):
+    def __init__(self, indices: List[int], shuffle: bool = True, seed: Optional[int] = None):
+        self._indices = indices
+        assert len(indices) > 0
+        self._shuffle = shuffle
+        if seed is None:
+            seed = comm.shared_random_seed()
+        self._seed = int(seed)
+
+        self._rank = comm.get_rank()
+        self._world_size = comm.get_world_size()
+
+    def __iter__(self):
+        start = self._rank
+        yield from itertools.islice(self._infinite_indices(), start, None, self._world_size)
+
+    def __len__(self):
+        return len(self._indices)
+
+    def _infinite_indices(self):
+        g = torch.Generator()
+        g.manual_seed(self._seed)
+        while True:
+            if self._shuffle:
+                yield from (self._indices[i] for i in torch.randperm(len(self._indices), generator=g))
+            else:
+                yield from self._indices
+
+
+class InfiniteSubsetRandomSamplerDistanceInverse(Sampler):
+    def __init__(self, indices_and_so3: List[tuple], shuffle: bool = True, seed: Optional[int] = None, K_ratio=0.5):
+        assert len(indices_and_so3) > 0
+        self._kdtree_sample_len = int(len(indices_and_so3) * K_ratio)
+        assert self._kdtree_sample_len > 0
+        self._indices_set = set(i for i, _ in indices_and_so3)
+        self._indices_and_so3 = indices_and_so3
+        self._tree = self._get_dist_kdtree(indices_and_so3=indices_and_so3)
+        self._shuffle = shuffle
+        if seed is None:
+            seed = comm.shared_random_seed()
+        self._seed = int(seed)
+
+        self._last_pair = random.choice(indices_and_so3)
+
+    def __iter__(self):
+        while True:
+            last_idx, last_so3 = self._last_pair
+            _, new_idx_list_diff = self._tree.query(last_so3, k=self._kdtree_sample_len)
+            new_idx = random.sample(self._indices_set - set(new_idx_list_diff), 1)[0]
+            self._last_pair = self._indices_and_so3[new_idx]
+            yield self._last_pair[0]
+
+    def __len__(self):
+        return len(self._indices_and_so3)
+
+    def _get_dist_kdtree(self, indices_and_so3):
+        data = np.asarray([so3 for img_i, so3 in indices_and_so3])
+        return KDTree(data)
+
+
+class BatchSeparatedBatchSampler(Sampler):
+    def __init__(self,
+                 sampler_dict: Dict,
+                 batch_size: int,
+                 drop_last: bool = True,
+                 equally_pick: bool = False,
+                 seed: Optional[int] = None) -> None:
+        self.sampler_pool = [iter(s) for s in sampler_dict.values()]
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        # self._seed = int(seed)
+        # self.sampler_keys = list(sampler_dict.keys())
+
+        # Equally pick from every sampler, otherwise use weights according to lengths of every sampler
+        self.equally_pick = equally_pick
+
+        self.sampler_sizes = torch.tensor([len(s) for s in sampler_dict.values()], dtype=torch.float32)
+        self.sampler_picker = self._infinite_batch_picker()
+
+    def __iter__(self):
+        for which_sampler in self.sampler_picker:
+            this_sampler = self.sampler_pool[which_sampler]
+            batch = []
+            for i in range(self.batch_size):
+                batch.append(next(this_sampler))  # infinite idx stream, never raise StopIterationErrors
+            yield batch
+
+    def __len__(self):
+        raise NotImplementedError
+
+    def _infinite_batch_picker(self):
+        g = torch.Generator()
+        # g.manual_seed(self._seed)
+        if self.equally_pick:
+            while True:
+                yield from torch.multinomial(torch.ones_like(self.sampler_sizes), 1, generator=g)
+        else:
+            while True:
+                yield from torch.multinomial(self.sampler_sizes, 1, generator=g)

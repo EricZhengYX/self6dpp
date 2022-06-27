@@ -18,6 +18,7 @@ from detectron2.data.samplers import InferenceSampler, RepeatFactorTrainingSampl
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.structures import BoxMode
 import ref
+from core.utils.my_distributed_sampler import BatchSeparatedBatchSampler
 from . import my_comm as comm
 
 
@@ -335,3 +336,27 @@ def my_build_batch_data_loader(
             worker_init_fn=worker_init_reset_seed,
             **kwargs,
         )
+
+
+def build_batch_separated_data_loader(dataset, sampler_pool, total_batch_size, num_workers=0):
+    world_size = comm.get_world_size()
+    assert (
+        total_batch_size > 0 and total_batch_size % world_size == 0
+    ), "Total batch size ({}) must be divisible by the number of gpus ({}).".format(total_batch_size, world_size)
+
+    batch_size = total_batch_size // world_size
+
+    # Horovod: limit # of CPU threads to be used per worker.
+    if num_workers > 0:
+        torch.set_num_threads(num_workers)
+
+    kwargs = {"num_workers": num_workers}
+
+    batch_sampler = BatchSeparatedBatchSampler(sampler_pool, batch_size, drop_last=True)
+    return torch.utils.data.DataLoader(
+        dataset,
+        batch_sampler=batch_sampler,
+        collate_fn=trivial_batch_collator,
+        worker_init_fn=worker_init_reset_seed,
+        **kwargs,
+    )
