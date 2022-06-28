@@ -246,7 +246,6 @@ class InfiniteSubsetRandomSamplerDistanceInverse(Sampler):
         if seed is None:
             seed = comm.shared_random_seed()
         self._seed = int(seed)
-
         self._last_pair = random.choice(indices_and_so3)
 
     def __iter__(self):

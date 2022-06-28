@@ -523,7 +523,7 @@ def do_train(
                     tb_writer=tbx_writer if is_log_iter else None,
                     iteration=iteration if is_log_iter else None,
                 )
-                '''
+                """
                 finite_loss_dict = {
                     k: v for k, v in self_loss_dict.items() if torch.isfinite(v)
                 }
@@ -536,7 +536,7 @@ def do_train(
                         it=iteration, items="\n".join(failed_names)
                     )
                     logger.warning(warn_msg)
-                '''
+                """
                 self_losses = sum(self_loss_dict.values())
                 assert torch.isfinite(self_losses).all(), self_loss_dict
 
@@ -550,21 +550,25 @@ def do_train(
                     ws_vis_dict, ws_loss_dict, ws_record_dict = repj_refine.forward(
                         gt_pose=batch["gt_pose_bx3x4"],
                         inf_rot=out_dict["rot"],
-                        inf_trans=out_dict["trans"],
+                        inf_trans=out_dict["trans"].unsqueeze(-1),
                         inf_full_masks=out_dict["full_mask_prob"],
                         inf_vis_masks=out_dict["vis_mask_prob"],
                         roi_cls=batch["roi_cls"],
                         roi_centers=batch["roi_center"],
                         roi_whs=batch["roi_wh"],
                         cam_K=batch["roi_cam"],
-                        sym_infos=None,
+                        sym_infos=batch["sym_info"],
                     )
+                    # TODO: FIX THIS UGLY THING
+                    for k, v in ws_loss_dict.items():
+                        if torch.isfinite(v):
+                            ws_loss_dict[k] = 0
                     weakly_losses = sum(ws_loss_dict.values())
                     assert torch.isfinite(weakly_losses).all(), ws_loss_dict
                 else:
                     weakly_losses = 0
                 losses = self_losses + weakly_losses
-                '''
+                """
                 if comm.is_main_process():
                     storage.put_scalars(
                         total_loss_self=losses_reduced, **loss_dict_reduced
@@ -594,7 +598,7 @@ def do_train(
                             t_error_self=t_error,
                             add_error_self=add_error,
                         )
-                '''
+                """
             else:
                 raise RuntimeError("Not in do_self or do_syn_sup")
             # endregion
@@ -644,13 +648,17 @@ def do_train(
                     loss_val = float(value)
                     tbx_writer.add_scalar(loss_name, loss_val, iteration)
             elif do_self:
-                tbx_writer.add_scalar("SelfLosses/SUM", float(self_losses.item()), iteration)
+                tbx_writer.add_scalar(
+                    "SelfLosses/SUM", float(self_losses.item()), iteration
+                )
                 for name, value in self_loss_dict.items():
                     loss_name = "SelfLosses/{}".format(name)
                     loss_val = float(value)
                     tbx_writer.add_scalar(loss_name, loss_val, iteration)
-                if do_weakly:
-                    tbx_writer.add_scalar("WeaklyLosses/SUM", float(weakly_losses.item()), iteration)
+                if do_weakly and this_iter_forward_mode == "pose":
+                    tbx_writer.add_scalar(
+                        "WeaklyLosses/SUM", float(weakly_losses.item()), iteration
+                    )
                     for name, value in ws_loss_dict.items():
                         loss_name = "WeaklyLosses/{}".format(name)
                         loss_val = float(value)

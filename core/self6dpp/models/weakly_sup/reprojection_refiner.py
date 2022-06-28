@@ -16,6 +16,7 @@ from core.self6dpp.losses.bbox_iou_loss import IOULoss
 from core.self6dpp.losses.ssim import MS_SSIM
 from core.self6dpp.models.model_utils import compute_mean_re_te
 from lib.pysixd.pose_error import add, adi
+from lib.pysixd.misc import backproject_th
 
 import matplotlib
 from matplotlib import pyplot as plt
@@ -29,9 +30,9 @@ class RepjRefiner(nn.Module):
         self,
         cfg,
         render: Callable,
-        models: List,
-        models_info: List,
-        train_obj_names: List,
+        models: List[dict],
+        models_info: List[dict],
+        train_obj_names: List[str],
     ):
         super().__init__()
         assert cfg.REPJ_REFINE.ENABLE, "RepjRefiner is not enabled"
@@ -108,9 +109,7 @@ class RepjRefiner(nn.Module):
         @param sym_infos: b*3*3/None
         @return: ws_out_dict, ws_loss_dict, ws_record_dict
         """
-        assert (
-            len(set(roi_cls)) == 1
-        ), "When using RepjRefiner, cls in one batch should be consist"
+        assert len(roi_cls.unique()) == 1, "When using RepjRefiner, cls in one batch should be consist"
         assert (
             inf_rot.shape[0]
             == inf_trans.shape[0]
@@ -196,15 +195,13 @@ class RepjRefiner(nn.Module):
             inf_ren_dict = self.render(
                 best_inf_r,
                 best_inf_t / scale,
-                cur_models[best_inf_idx],
+                cur_models[best_inf_idx: best_inf_idx + 1],
                 Ks=cam_K[best_inf_idx].unsqueeze(0),
-            )  # colored img is in bgr-form
-            img_inf = rearrange(
-                inf_ren_dict["color"][..., [2, 1, 0]], "b h w c -> b c h w"
-            ).repeat(batch_size - 1, 1, 1, 1)
-            mask_inf = rearrange(inf_ren_dict["prob"], "b h w -> b 1 h w").repeat(
-                batch_size - 1, 1, 1, 1
             )
+            img_inf = rearrange(
+                inf_ren_dict["color"], "b h w c -> b c h w"
+            ).repeat(batch_size - 1, 1, 1, 1)
+            mask_inf = inf_ren_dict["prob"].repeat(batch_size - 1, 1, 1)  # (b-1)*h*w
 
             # images by rendering repj-poses
             ms_rep_ts = rep_ts / scale
@@ -215,9 +212,9 @@ class RepjRefiner(nn.Module):
                 Ks=rep_K,
             )
             img_rep = rearrange(
-                rep_ren_dict["color"][..., [2, 1, 0]], "b h w c -> b c h w"
+                rep_ren_dict["color"], "b h w c -> b c h w"
             )
-            mask_rep = rearrange(rep_ren_dict["prob"], "b h w -> b 1 h w")
+            mask_rep = rep_ren_dict["prob"]  # (b-1)*h*w
 
             name_in_loss_dict = "mask iou {}".format(scale_name)
             loss_dict[name_in_loss_dict], this_valid_miou = (
@@ -288,8 +285,8 @@ class RepjRefiner(nn.Module):
             inf_ts.cpu(),
             rep_rs.cpu().detach(),
             rep_ts.cpu().detach(),
-            model_vertices=cur_models[0]["vertices"][0],
-            diameter=self.raw_models_info[roi_cls_id],
+            model_vertices=cur_models[0]["vertices"],
+            diameter=self.raw_models_info[roi_cls_id]["diameter"],
             sym=sym,
         ).mean()
         vis_dict["add_gt"] = self._make_add(
@@ -297,13 +294,14 @@ class RepjRefiner(nn.Module):
             inf_trans.cpu().detach(),
             gt_r.cpu(),
             gt_t.cpu(),
-            model_vertices=cur_models[0]["vertices"][0],
-            diameter=self.raw_models_info[roi_cls_id],
+            model_vertices=cur_models[0]["vertices"],
+            diameter=self.raw_models_info[roi_cls_id]["diameter"],
             sym=sym,
         ).mean()
 
         storage = get_event_storage()
-        storage.put_scalars(**vis_dict)
+        for k, v in vis_dict.items():
+            storage.put_scalar("vis/" + k, v)
         # endregion
 
         return vis_dict, loss_dict, record_dict
@@ -365,6 +363,17 @@ class RepjRefiner(nn.Module):
     def _get_loss_weight(self, cfg):
         return cfg.REPJ_REFINE.REPJ_REFINER_LW
 
+    def _proj_3Dbbox(self, points3d: torch.Tensor, K: torch.Tensor):
+        """
+
+        @param points3d: n*3*8
+        @param K: n*3*3
+        @return: n*3*8
+        """
+        assert points3d.ndim == 3 and points3d.shape[1] == 3
+        z = points3d[:, 2, None]
+        return torch.bmm(K, points3d) / z
+
     def _get_boxes_from_rt(
         self, r: torch.Tensor, t: torch.Tensor, cls_id, K: torch.Tensor
     ):
@@ -380,7 +389,7 @@ class RepjRefiner(nn.Module):
         assert r.shape == (b, 3, 3) and t.shape == (b, 3, 1)
         assert r.device == t.device
         bbox_3d = r @ self.models_info[cls_id] + t  # n*3*8
-        bbox_2d = self._back_proj(bbox_3d, K)  # n*3*8
+        bbox_2d = self._proj_3Dbbox(bbox_3d, K)  # n*3*8
 
         bbox_2d_x, bbox_2d_y = bbox_2d[:, 0, :], bbox_2d[:, 1, :]
         xmin = bbox_2d_x.min(dim=1, keepdim=True).values

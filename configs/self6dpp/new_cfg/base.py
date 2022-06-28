@@ -1,6 +1,6 @@
 _base_ = ["../../_base_/self6dpp_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/holepuncher"
+OUTPUT_DIR = "YOU SHOULD REPLACE THIS"
 INPUT = dict(
     WITH_DEPTH=False,
     DZI_PAD_SCALE=1.5,
@@ -62,36 +62,7 @@ SOLVER = dict(
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=100,  # NOTE: only real data, iterations are very small
     CLIP_GRADIENTS=dict(ENABLED=True, CLIP_TYPE="full_model", CLIP_VALUE=100),
-    CILP_GRAD=20,
-)
-
-"""
-DATASETS = dict(
-    TRAIN=("lm_holepuncher_train",),  # real data
-    TRAIN2_RATIO=0.0,
-    TEST=("lm_holepuncher_test",),
-    # for self-supervised training
-    DET_FILES_TRAIN=(
-        "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lm_13_train.json",
-    ),
-    DET_THR_TRAIN=0.5,
-    DET_FILES_TEST=(
-        "datasets/BOP_DATASETS/lm/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lm_pbr_lm_test_16e.json",
-    ),
-)
-"""
-DATASETS = dict(
-    TRAIN=("lmo_NoBopTest_holepuncher_train",),  # real data
-    TRAIN2_RATIO=0.0,
-    TEST=("lmo_holepuncher_bop_test",),
-    # for self-supervised training
-    DET_FILES_TRAIN=(
-        "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
-    ),
-    DET_THR_TRAIN=0.5,
-    DET_FILES_TEST=(
-        "datasets/BOP_DATASETS/lmo/test/test_bboxes/yolov4x_640_test672_augCosyAAEGray_ranger_lmo_pbr_lmo_test_16e.json",
-    ),
+    CILP_GRAD=200,
 )
 
 '''
@@ -112,7 +83,7 @@ RENDERER = dict(
 )  # DIBR | dibr | new_DIBR
 MODEL = dict(
     # synthetically trained model
-    WEIGHTS="halfway_hp.pth",
+    WEIGHTS="YOU SHOULD REPLACE THIS",
     # init
     # ad10    rete5    te2
     # 57.90   57.24    85.33
@@ -229,7 +200,7 @@ MODEL = dict(
             NORM_RT_LW=1.0,
             # LAB space loss ------------------
             LAB_NO_L=True,
-            LAB_LW=0.2,
+            LAB_LW=0.,
             # MS-SSIM loss --------------------
             MS_SSIM_LW=1.0,
             # perceptual loss -----------------
@@ -265,7 +236,7 @@ TRAIN = dict(
 )
 
 TEST = dict(
-    EVAL_PERIOD=20,  # count in epochs
+    EVAL_PERIOD=3,  # count in epochs
     VIS=False,
     TEST_BBOX_TYPE="est"
 )  # gt | est
