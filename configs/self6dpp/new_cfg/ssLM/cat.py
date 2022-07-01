@@ -1,6 +1,6 @@
 _base_ = ["ssLM_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lm/base/cat"
+OUTPUT_DIR = "output/self6dpp/new_config/lm/cat"
 
 DATASETS = dict(
     TRAIN=("lm_real_cat_train",),

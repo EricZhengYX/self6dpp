@@ -1,6 +1,6 @@
 _base_ = ["ssLM_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lm/base/phone"
+OUTPUT_DIR = "output/self6dpp/new_config/lm/phone"
 
 DATASETS = dict(
     TRAIN=("lm_real_phone_train",),

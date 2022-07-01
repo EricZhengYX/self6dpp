@@ -561,8 +561,8 @@ def do_train(
                     )
                     # TODO: FIX THIS UGLY THING
                     for k, v in ws_loss_dict.items():
-                        if torch.isfinite(v):
-                            ws_loss_dict[k] = 0
+                        if not torch.isfinite(v):
+                            ws_loss_dict.pop(k)
                     weakly_losses = sum(ws_loss_dict.values())
                     assert torch.isfinite(weakly_losses).all(), ws_loss_dict
                 else:

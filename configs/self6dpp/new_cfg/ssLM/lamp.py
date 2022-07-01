@@ -1,6 +1,6 @@
 _base_ = ["ssLM_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lm/base/lamp"
+OUTPUT_DIR = "output/self6dpp/new_config/lm/lamp"
 
 DATASETS = dict(
     TRAIN=("lm_real_lamp_train",),

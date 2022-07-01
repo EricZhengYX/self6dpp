@@ -1313,6 +1313,8 @@ def my_get_DIBR_models_renderer(
             models[obj_name] = load_ply(ply_pth, vertex_scale=0.001)
         mmcv.dump(models, full_pth)
 
+    # fix a bug when using PLY+new_DIBR
+    color_range = cfg.RENDERER.get("COLOR_RANGE", 1)
     std_dtype = torch.float32
     models_selected = []
     for name in obj_names:
@@ -1320,7 +1322,7 @@ def my_get_DIBR_models_renderer(
         models_selected.append(
             {
                 "vertices": torch.tensor(model["pts"], device="cuda", dtype=std_dtype),
-                "colors": torch.tensor(model["colors"], device="cuda", dtype=std_dtype),
+                "colors": torch.tensor(model["colors"] / color_range, device="cuda", dtype=std_dtype),
                 "normals": torch.tensor(
                     model["normals"], device="cuda", dtype=std_dtype
                 ),

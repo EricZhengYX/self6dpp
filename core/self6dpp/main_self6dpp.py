@@ -191,7 +191,7 @@ def main(args):
         elif cfg.RENDERER.DIFF_RENDERER == "new_DIBR":
             ren_models, ren = my_get_DIBR_models_renderer(
                 cfg, data_ref, obj_names=train_obj_names
-            )
+            )  # colors should be at range 0-1
         elif cfg.RENDERER.DIFF_RENDERER == "dibr":
             ren_models, ren = get_dibr_models_renderer(
                 cfg, data_ref, obj_names=train_obj_names, gpu_id=render_gpu_id

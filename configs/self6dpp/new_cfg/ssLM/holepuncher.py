@@ -1,6 +1,6 @@
 _base_ = ["ssLM_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lm/base/holepuncher"
+OUTPUT_DIR = "output/self6dpp/new_config/lm/holepuncher"
 
 DATASETS = dict(
     TRAIN=("lm_real_holepuncher_train",),

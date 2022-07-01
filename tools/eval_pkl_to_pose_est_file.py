@@ -3,9 +3,9 @@ import re
 import numpy as np
 from core.self6dpp.datasets.lm_dataset_d2 import LM_DICT
 
-file_name = "/home/eric/tb_remote/self-my-config-test_lmo_NoBopTest_ape_train_preds.pkl"
+file_name = "/home/eric/tb_remote/ape-test_lmo_NoBopTest_ape_train_preds.pkl"
 record = mmcv.load(file_name)
-save_name_suffix = "lmo_NoBopTest_ape_train_e43474"
+save_name_suffix = "lmo_NoBopTest_ape_train_ruida"
 
 result = {}
 for obj_name, single_obj_dict in record.items():

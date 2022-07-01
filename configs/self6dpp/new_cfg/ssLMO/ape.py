@@ -1,6 +1,6 @@
 _base_ = ["ssLMO_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lmo/base/ape"
+OUTPUT_DIR = "output/self6dpp/new_config/lmo/ape"
 
 DATASETS = dict(
     TRAIN=("lmo_NoBopTest_ape_train",),

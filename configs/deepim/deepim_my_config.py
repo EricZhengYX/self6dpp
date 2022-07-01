@@ -64,7 +64,7 @@ DATASETS = dict(
     #     "datasets/BOP_DATASETS/lm/test/init_poses/resnest50d_a6_AugCosyAAEGray_BG05_mlBCE_lm_pbr_100e_so.json",
     # ),
     INIT_POSE_FILES_TEST=(
-        "/home/eric/tb_remote/pose_est_lmo_NoBopTest_ape_train_e43474.json",
+        "/home/eric/tb_remote/pose_est_lmo_NoBopTest_ape_train_ruida.json",
         # "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
     ),
 )

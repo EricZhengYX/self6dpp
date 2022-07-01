@@ -1,6 +1,6 @@
 _base_ = ["ssLM_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lm/base/camera"
+OUTPUT_DIR = "output/self6dpp/new_config/lm/camera"
 
 DATASETS = dict(
     TRAIN=("lm_real_camera_train",),

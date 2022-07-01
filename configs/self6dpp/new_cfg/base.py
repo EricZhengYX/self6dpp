@@ -2,7 +2,7 @@ _base_ = ["../../_base_/self6dpp_base.py"]
 
 OUTPUT_DIR = "YOU SHOULD REPLACE THIS"
 INPUT = dict(
-    WITH_DEPTH=False,
+    WITH_DEPTH=True,
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
     CHANGE_BG_PROB=0.,  # 0.5
@@ -80,6 +80,7 @@ Turn into GDRN_MaskNormVF
 RENDERER = dict(
     ENABLE=False,
     DIFF_RENDERER="new_DIBR",
+    COLOR_RANGE=255,  # fix a bug when using PLY+new_DIBR
 )  # DIBR | dibr | new_DIBR
 MODEL = dict(
     # synthetically trained model

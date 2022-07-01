@@ -3,7 +3,8 @@ _base_ = ["../base.py"]
 OUTPUT_DIR = "output/self6dpp/new_config/lmo/base"
 
 SOLVER = dict(
-    TOTAL_EPOCHS=40,
+    TOTAL_EPOCHS=100,
+    WARMUP_ITERS=1000,
     CHECKPOINT_PERIOD=10,
     OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-6, weight_decay=0),
 )

@@ -1,6 +1,6 @@
 _base_ = ["ssLM_base.py"]
 
-OUTPUT_DIR = "output/self6dpp/new_config/lm/base/benchvise"
+OUTPUT_DIR = "output/self6dpp/new_config/lm/benchvise"
 
 DATASETS = dict(
     TRAIN=("lm_real_benchvise_train",),
