@@ -697,7 +697,7 @@ def do_train(
                         "Eval metrics/{}".format(title), tb_eval_markdown_str, iteration
                     )
 
-                torch.save(model.state_dict(), "student_{}.pth".format(epoch))
+                # torch.save(model.state_dict(), "student_{}.pth".format(epoch))
                 # Compared to "train_net.py", the test results are not dumped to EventStorage
                 comm.synchronize()
             # endregion

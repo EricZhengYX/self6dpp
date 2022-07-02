@@ -436,8 +436,17 @@ def compute_self_loss_pose(
         ren_ret["color"][..., [2, 1, 0]], "b h w c -> b c h w"
     )  # bgr;[0,1]
     ren_mask = rearrange(ren_ret["mask"].to(torch.float32), "b h w -> b 1 h w")
-    # ren_norm = rearrange(ren_ret["norm"], "b h w c -> b c h w")
-    # ren_norm_roi = batch_crop_resize(ren_norm, batch["inst_rois"], out_H=in_res, out_W=in_res)
+    ren_ret_teacher = ren_func(
+        batch["pseudo_rot"],
+        batch["pseudo_trans"],
+        cur_models,
+        Ks=batch["K_renderer"],
+        width=im_W,
+        height=im_H,
+        mode=["norm",],
+    )
+    ren_norm_teacher = rearrange(ren_ret_teacher["norm"], "b h w c -> b c h w")
+    ren_norm_teacher_roi = batch_crop_resize(ren_norm_teacher, batch["inst_rois"], out_H=in_res, out_W=in_res)
     if "prob" in ren_ret.keys():
         ren_prob = rearrange(ren_ret["prob"].to(torch.float32), "b h w -> b 1 h w")
     else:
@@ -646,6 +655,22 @@ def compute_self_loss_pose(
         )
         loss_dict["loss_init_pred_norm_full"] = (
             norm_loss_full * self_loss_cfg.FULL_NORM_LW
+        )
+    # endregion
+
+    # region norm pseudo RT<->pred loss -------------------------------
+    if self_loss_cfg.VIS_NORM_RT_LW > 0:
+        norm_teacher_rt_loss_vis = norm_loss_func(
+            ren_norm_teacher_roi, pred_vis_norm, pseudo_vis_mask
+        )
+        loss_dict["loss_pseudo_rt_norm_vis"] = norm_teacher_rt_loss_vis * self_loss_cfg.VIS_NORM_RT_LW
+
+    if self_loss_cfg.FULL_NORM_RT_LW > 0:
+        norm_teacher_rt_loss_full = norm_loss_func(
+            ren_norm_teacher_roi, pred_full_norm, pseudo_full_mask
+        )
+        loss_dict["loss_pseudo_rt_norm_full"] = (
+            norm_teacher_rt_loss_full * self_loss_cfg.FULL_NORM_RT_LW
         )
     # endregion
 

@@ -5,7 +5,7 @@ INPUT = dict(
     WITH_DEPTH=True,
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
-    CHANGE_BG_PROB=0.,  # 0.5
+    CHANGE_BG_PROB=0.5,  # 0.5
     COLOR_AUG_PROB=0.8,
     COLOR_AUG_TYPE="iaa_custom",
     COLOR_AUG_BG_REPLACE="datasets/VOCdevkit/VOC2012/JPEGImages",
@@ -32,7 +32,7 @@ INPUT = dict(
         # cosy+aae
     ),
     POSE_VARIATED_AUG=dict(
-        OVERALL_PROB=0.3,
+        OVERALL_PROB=0.2,
         CROP=dict(
             PERCENT=0.1
         ),
@@ -62,7 +62,7 @@ SOLVER = dict(
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=100,  # NOTE: only real data, iterations are very small
     CLIP_GRADIENTS=dict(ENABLED=True, CLIP_TYPE="full_model", CLIP_VALUE=100),
-    CILP_GRAD=200,
+    CILP_GRAD=500,
 )
 
 '''
@@ -188,17 +188,17 @@ MODEL = dict(
         ),
         SELF_LOSS_CFG=dict(
             # vf loss -------------------------
-            VIS_RT_VF_LW=1.0,
             VIS_VF_LW=1.0,
             FULL_VF_LW=1.0,
+            # vf-rt loss
+            VIS_RT_VF_LW=1.0,
             FULL_RT_VF_LW=1.0,
             # vertex norm loss ---------------------------
-            NORM_LOSS_TYPE="L1+Cos",
             VIS_NORM_LW=1.0,
             FULL_NORM_LW=1.0,
             # vertex norm-rt loss ---------------------------
-            NORM_RT_LOSS_TYPE="L1+Cos",
-            NORM_RT_LW=1.0,
+            VIS_NORM_RT_LW=1.0,
+            FULL_NORM_RT_LW=1.0,
             # LAB space loss ------------------
             LAB_NO_L=True,
             LAB_LW=0.,
@@ -220,12 +220,12 @@ MODEL = dict(
             CHAMFER_DIST_THR=0.5,
             # refiner-based loss --------------
             REFINE_LW=0.0,
-            # xyz loss (init, ren)
-            XYZ_INIT_REN_LOSS_TYPE="L1",  # L1 | CE_coor (for cls)
-            XYZ_INIT_REN_LW=0.0,
+            # xyz loss (init, pred)
+            XYZ_INIT_PRED_LOSS_TYPE="smoothL1",  # L1 | CE_coor (for cls)
+            XYZ_INIT_PRED_LW=1.0,
             # point matching loss using pseudo pose ---------------------------
             SELF_PM_CFG=dict(
-                loss_weight=10.0,  # NOTE: >0 to enable this loss
+                loss_weight=50.0,  # NOTE: >0 to enable this loss
             ),
         ),
     ),
