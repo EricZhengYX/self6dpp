@@ -445,8 +445,6 @@ def compute_self_loss_pose(
         height=im_H,
         mode=["norm",],
     )
-    ren_norm_teacher = rearrange(ren_ret_teacher["norm"], "b h w c -> b c h w")
-    ren_norm_teacher_roi = batch_crop_resize(ren_norm_teacher, batch["inst_rois"], out_H=in_res, out_W=in_res)
     if "prob" in ren_ret.keys():
         ren_prob = rearrange(ren_ret["prob"].to(torch.float32), "b h w -> b 1 h w")
     else:
@@ -659,19 +657,26 @@ def compute_self_loss_pose(
     # endregion
 
     # region norm pseudo RT<->pred loss -------------------------------
-    if self_loss_cfg.VIS_NORM_RT_LW > 0:
-        norm_teacher_rt_loss_vis = norm_loss_func(
-            ren_norm_teacher_roi, pred_vis_norm, pseudo_vis_mask
+    if self_loss_cfg.VIS_NORM_RT_LW > 0 or self_loss_cfg.FULL_NORM_RT_LW > 0:
+        ren_norm_teacher = rearrange(ren_ret_teacher["norm"], "b h w c -> b c h w")
+        ren_norm_teacher_roi = batch_crop_resize(
+            ren_norm_teacher, batch["inst_rois"],
+            out_H=pred_vis_mask_prob.shape[-2],
+            out_W=pred_vis_mask_prob.shape[-1],
         )
-        loss_dict["loss_pseudo_rt_norm_vis"] = norm_teacher_rt_loss_vis * self_loss_cfg.VIS_NORM_RT_LW
+        if self_loss_cfg.VIS_NORM_RT_LW > 0:
+            norm_teacher_rt_loss_vis = norm_loss_func(
+                ren_norm_teacher_roi, pred_vis_norm, pseudo_vis_mask
+            )
+            loss_dict["loss_pseudo_rt_norm_vis"] = norm_teacher_rt_loss_vis * self_loss_cfg.VIS_NORM_RT_LW
 
-    if self_loss_cfg.FULL_NORM_RT_LW > 0:
-        norm_teacher_rt_loss_full = norm_loss_func(
-            ren_norm_teacher_roi, pred_full_norm, pseudo_full_mask
-        )
-        loss_dict["loss_pseudo_rt_norm_full"] = (
-            norm_teacher_rt_loss_full * self_loss_cfg.FULL_NORM_RT_LW
-        )
+        if self_loss_cfg.FULL_NORM_RT_LW > 0:
+            norm_teacher_rt_loss_full = norm_loss_func(
+                ren_norm_teacher_roi, pred_full_norm, pseudo_full_mask
+            )
+            loss_dict["loss_pseudo_rt_norm_full"] = (
+                norm_teacher_rt_loss_full * self_loss_cfg.FULL_NORM_RT_LW
+            )
     # endregion
 
     # region prepare for color loss ----------------------
@@ -902,18 +907,30 @@ def compute_self_loss_pose(
     # endregion
 
     # region pm loss --------------------------------
+    pseudo_trans = batch["pseudo_trans"]
+    pseudo_rot = batch["pseudo_rot"]
     if self_loss_cfg.SELF_PM_CFG.loss_weight > 0:
         pm_loss_func = PyPMLoss(**self_loss_cfg.SELF_PM_CFG)
         loss_pm_dict = pm_loss_func(
             pred_rots=pred_rot,
-            gt_rots=batch["pseudo_rot"],
+            gt_rots=pseudo_rot,
             points=batch["roi_points"],
             pred_transes=pred_trans,
-            gt_transes=batch["pseudo_trans"],
+            gt_transes=pseudo_trans,
             extents=batch["roi_extent"],
             sym_infos=batch["sym_info"],
         )
         loss_dict.update(loss_pm_dict)
+    # endregion
+
+    # region pm loss --------------------------------
+    if self_loss_cfg.TRANS_LW > 0:
+        loss_dict["loss_trans_xy"] = nn.SmoothL1Loss(reduction="mean")(
+            pred_trans[:, :2], pseudo_trans[:, :2]
+        )
+        loss_dict["loss_trans_z"] = nn.SmoothL1Loss(reduction="mean")(
+            pred_trans[:, 2], pseudo_trans[:, 2]
+        )
     # endregion
 
     # grid_show and write to tensorboard -----------------------------------------------------

@@ -225,8 +225,10 @@ MODEL = dict(
             XYZ_INIT_PRED_LW=1.0,
             # point matching loss using pseudo pose ---------------------------
             SELF_PM_CFG=dict(
-                loss_weight=50.0,  # NOTE: >0 to enable this loss
+                loss_weight=100.0,  # NOTE: >0 to enable this loss
             ),
+            # trans loss
+            TRANS_LW=10.0,
         ),
     ),
 )
