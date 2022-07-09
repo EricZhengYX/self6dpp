@@ -3,7 +3,6 @@ import os
 import os.path as osp
 import torch
 from torch import nn
-from torch.cuda.amp import autocast, GradScaler
 import mmcv
 import time
 import cv2
@@ -259,7 +258,6 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
 
     AMP_ON = cfg.SOLVER.AMP.ENABLED
     logger.info(f"AMP enabled: {AMP_ON}")
-    grad_scaler = GradScaler()
 
     # resume or load model ===================================
     checkpointer = MyCheckpointer(
@@ -267,7 +265,6 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
         cfg.OUTPUT_DIR,
         optimizer=optimizer,
         scheduler=scheduler,
-        gradscaler=grad_scaler,
         save_to_disk=comm.is_main_process(),
     )
     start_iter = (
@@ -335,7 +332,7 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
     logger.info("Starting training from iteration {}".format(start_iter))
     iter_time = None
     with EventStorage(start_iter) as storage:
-        optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad()
         for iteration in range(start_iter, max_iter):
             storage.iter = iteration
             epoch = iteration // iters_per_epoch + 1  # epoch start from 1
@@ -366,42 +363,41 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 inp = torch.cat([batch["roi_img"], batch["roi_depth"]], dim=1)
             else:
                 inp = batch["roi_img"]
-            with autocast(enabled=AMP_ON):
-                out_dict, loss_dict = model(
-                    inp,
-                    gt_xyz=batch.get("roi_xyz", None),
-                    gt_xyz_bin=batch.get("roi_xyz_bin", None),
-                    gt_mask_trunc=batch.get("roi_mask_trunc", None),
-                    gt_mask_vis=batch.get("roi_mask_visib", None),
-                    gt_mask_full=batch.get("roi_mask_full", None),
-                    gt_mask_obj=batch.get("roi_mask_obj", None),
-                    gt_vf_vis=batch.get("roi_vf_visib", None),
-                    gt_vf_full=batch.get("roi_vf_full", None),
-                    gt_norm_vis=batch.get("roi_norm_vis", None),
-                    gt_norm_full=batch.get("roi_norm", None),
-                    gt_region=batch.get("roi_region", None),
-                    gt_ego_rot=batch.get("ego_rot", None),
-                    gt_trans=batch.get("trans", None),
-                    gt_trans_ratio=batch.get("roi_trans_ratio", None),
-                    gt_points=batch.get("roi_points", None),
-                    sym_infos=batch.get("sym_info", None),
-                    roi_classes=batch.get("roi_cls", None),
-                    roi_cams=batch.get("roi_cam", None),
-                    roi_whs=batch.get("roi_wh", None),
-                    roi_centers=batch.get("roi_center", None),
-                    roi_scale=batch.get("roi_scale", None),
-                    resize_ratios=batch.get("resize_ratio", None),
-                    roi_coord_2d=batch.get("roi_coord_2d", None),
-                    roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-                    roi_extents=batch.get("roi_extent", None),
-                    ori_height=batch["height"],
-                    ori_width=batch["width"],
-                    fps_pts=batch.get("fps", None),
-                    do_loss=True,
-                    loss_mode=this_iter_data_mode,
-                )
-                losses = sum(loss_dict.values())
-                assert torch.isfinite(losses).all(), loss_dict
+            out_dict, loss_dict = model(
+                inp,
+                gt_xyz=batch.get("roi_xyz", None),
+                gt_xyz_bin=batch.get("roi_xyz_bin", None),
+                gt_mask_trunc=batch.get("roi_mask_trunc", None),
+                gt_mask_vis=batch.get("roi_mask_visib", None),
+                gt_mask_full=batch.get("roi_mask_full", None),
+                gt_mask_obj=batch.get("roi_mask_obj", None),
+                gt_vf_vis=batch.get("roi_vf_visib", None),
+                gt_vf_full=batch.get("roi_vf_full", None),
+                gt_norm_vis=batch.get("roi_norm_vis", None),
+                gt_norm_full=batch.get("roi_norm", None),
+                gt_region=batch.get("roi_region", None),
+                gt_ego_rot=batch.get("ego_rot", None),
+                gt_trans=batch.get("trans", None),
+                gt_trans_ratio=batch.get("roi_trans_ratio", None),
+                gt_points=batch.get("roi_points", None),
+                sym_infos=batch.get("sym_info", None),
+                roi_classes=batch.get("roi_cls", None),
+                roi_cams=batch.get("roi_cam", None),
+                roi_whs=batch.get("roi_wh", None),
+                roi_centers=batch.get("roi_center", None),
+                roi_scale=batch.get("roi_scale", None),
+                resize_ratios=batch.get("resize_ratio", None),
+                roi_coord_2d=batch.get("roi_coord_2d", None),
+                roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
+                roi_extents=batch.get("roi_extent", None),
+                ori_height=batch["height"],
+                ori_width=batch["width"],
+                fps_pts=batch.get("fps", None),
+                do_loss=True,
+                loss_mode=this_iter_data_mode,
+            )
+            losses = sum(loss_dict.values())
+            assert torch.isfinite(losses).all(), loss_dict
             if comm.is_main_process():
                 log_first_n(
                     logging.INFO,
@@ -417,41 +413,23 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 storage.put_scalars(total_loss=losses_reduced, **loss_dict_reduced)
 
             # backward & optimize ======================================================
-            if AMP_ON:
-                grad_scaler.scale(losses).backward()
-
-                # # Unscales the gradients of optimizer's assigned params in-place
-                # grad_scaler.unscale_(optimizer)
-                # # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-                # optimize
-                if iteration % accumulate_iter == 0:
-                    if comm._USE_HVD:
-                        optimizer.synchronize()
-                        with optimizer.skip_synchronize():
-                            grad_scaler.step(optimizer)
-                            grad_scaler.update()
-                    else:
-                        grad_scaler.step(optimizer)
-                        grad_scaler.update()
-            else:
-                losses.backward()
-                # optimize
-                if iteration % accumulate_iter == 0:
-                    # set nan grads to 0
-                    for param in model.parameters():
-                        if param.grad is not None:
-                            nan_to_num(
-                                param.grad,
-                                nan=0,
-                                posinf=1e5,
-                                neginf=-1e5,
-                                out=param.grad,
-                            )
-                    total_norm = nn.utils.clip_grad_norm_(
-                        model.parameters(), max_norm=clip_grad
-                    )
-                    optimizer.step()
+            losses.backward()
+            # optimize
+            if iteration % accumulate_iter == 0:
+                # set nan grads to 0
+                for param in model.parameters():
+                    if param.grad is not None:
+                        nan_to_num(
+                            param.grad,
+                            nan=0,
+                            posinf=1e5,
+                            neginf=-1e5,
+                            out=param.grad,
+                        )
+                total_norm = nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=clip_grad
+                )
+                optimizer.step()
 
             if comm.is_main_process():
                 log_first_n(
@@ -460,7 +438,7 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                     n=2,
                 )
             if iteration % accumulate_iter == 0:
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad()
                 if ema is not None:
                     ema.update(model)
                 storage.put_scalar(

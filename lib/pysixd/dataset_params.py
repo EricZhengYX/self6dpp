@@ -191,7 +191,7 @@ def get_split_params(datasets_path, dataset_name, split, split_type=None):
     gray_ext = ".png"
     depth_ext = ".png"
 
-    if split_type == "pbr":
+    if split_type == "preload":
         # The photorealistic synthetic images are provided in the JPG format.
         rgb_ext = ".jpg"
     elif dataset_name == "itodd":
@@ -240,7 +240,7 @@ def get_split_params(datasets_path, dataset_name, split, split_type=None):
                 "kinect": (400, 400),
                 "canon": (1900, 1900),
                 "render_reconst": (1280, 1024),
-                "pbr": (720, 540),
+                "preload": (720, 540),
                 "synthetless": (400, 400),
             },
             "test": {
@@ -349,7 +349,7 @@ def get_split_params(datasets_path, dataset_name, split, split_type=None):
             }[split]
 
         p["im_size"] = {
-            "pbr": (640, 480),
+            "preload": (640, 480),
             "primesense": (640, 480),
             "kinect": (1920, 1080),
         }[split_type]
@@ -370,7 +370,7 @@ def get_split_params(datasets_path, dataset_name, split, split_type=None):
         if split == "train":
             p["scene_ids"] = {
                 "real": list(range(48)) + list(range(60, 92)),
-                "pbr": None,  # Use function get_present_scene_ids().
+                "preload": None,  # Use function get_present_scene_ids().
                 "synt": list(range(80)),
             }[split_type]
         elif split == "test":

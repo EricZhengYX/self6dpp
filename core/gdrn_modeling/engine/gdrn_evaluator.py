@@ -14,7 +14,6 @@ import mmcv
 import numpy as np
 import ref
 import torch
-from torch.cuda.amp import autocast
 from transforms3d.quaternions import quat2mat
 
 from detectron2.data import MetadataCatalog, DatasetCatalog
@@ -614,18 +613,17 @@ def gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=False
             else:
                 inp = batch["roi_img"]
 
-            with autocast(enabled=amp_test):  # gdrn amp_test seems slower
-                out_dict = model(
-                    inp,
-                    roi_classes=batch["roi_cls"],
-                    roi_cams=batch["roi_cam"],
-                    roi_whs=batch["roi_wh"],
-                    roi_centers=batch["roi_center"],
-                    resize_ratios=batch["resize_ratio"],
-                    roi_coord_2d=batch.get("roi_coord_2d", None),
-                    roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-                    roi_extents=batch.get("roi_extent", None),
-                )
+            out_dict = model(
+                inp,
+                roi_classes=batch["roi_cls"],
+                roi_cams=batch["roi_cam"],
+                roi_whs=batch["roi_wh"],
+                roi_centers=batch["roi_center"],
+                resize_ratios=batch["resize_ratio"],
+                roi_coord_2d=batch.get("roi_coord_2d", None),
+                roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
+                roi_extents=batch.get("roi_extent", None),
+            )
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             cur_compute_time = time.perf_counter() - start_compute_time
@@ -765,18 +763,17 @@ def gdrn_save_result_of_dataset(cfg, model, data_loader, output_dir, dataset_nam
                 inp = torch.cat([batch["roi_img"], batch["roi_depth"]], dim=1)
             else:
                 inp = batch["roi_img"]
-            with autocast(enabled=amp_test):  # gdrn amp_test seems slower
-                out_dict = model(
-                    inp,
-                    roi_classes=batch["roi_cls"],
-                    roi_cams=batch["roi_cam"],
-                    roi_whs=batch["roi_wh"],
-                    roi_centers=batch["roi_center"],
-                    resize_ratios=batch["resize_ratio"],
-                    roi_coord_2d=batch.get("roi_coord_2d", None),
-                    roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
-                    roi_extents=batch.get("roi_extent", None),
-                )
+            out_dict = model(
+                inp,
+                roi_classes=batch["roi_cls"],
+                roi_cams=batch["roi_cam"],
+                roi_whs=batch["roi_wh"],
+                roi_centers=batch["roi_center"],
+                resize_ratios=batch["resize_ratio"],
+                roi_coord_2d=batch.get("roi_coord_2d", None),
+                roi_coord_2d_rel=batch.get("roi_coord_2d_rel", None),
+                roi_extents=batch.get("roi_extent", None),
+            )
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             cur_compute_time = time.perf_counter() - start_compute_time

@@ -173,7 +173,7 @@ for scene_id in scene_ids:
         # Load the color and depth images and prepare images for rendering.
         rgb = None
         if p["vis_rgb"]:
-            if "rgb" in dp_split["im_modalities"] or p["dataset_split_type"] == "pbr":
+            if "rgb" in dp_split["im_modalities"] or p["dataset_split_type"] == "preload":
                 rgb = inout.load_im(dp_split["rgb_tpath"].format(scene_id=scene_id, im_id=im_id))[:, :, :3]
             elif "gray" in dp_split["im_modalities"]:
                 gray = inout.load_im(dp_split["gray_tpath"].format(scene_id=scene_id, im_id=im_id))

@@ -51,7 +51,7 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=2,  # 6, maybe need to be < 24
+    IMS_PER_BATCH=6,  # 6, maybe need to be < 24
     TOTAL_EPOCHS=100,
     CHECKPOINT_PERIOD=30,
     LR_SCHEDULER_NAME="flat_and_anneal",
@@ -61,7 +61,7 @@ SOLVER = dict(
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=100,  # NOTE: only real data, iterations are very small
-    CLIP_GRADIENTS=dict(ENABLED=True, CLIP_TYPE="full_model", CLIP_VALUE=100),
+    CLIP_GRADIENTS=dict(ENABLED=True, CLIP_TYPE="full_model", CLIP_VALUE=200),
     CILP_GRAD=500,
 )
 
@@ -191,14 +191,14 @@ MODEL = dict(
             VIS_VF_LW=1.0,
             FULL_VF_LW=1.0,
             # vf-rt loss
-            VIS_RT_VF_LW=1.0,
-            FULL_RT_VF_LW=1.0,
+            VIS_RT_VF_LW=10.0,
+            FULL_RT_VF_LW=10.0,
             # vertex norm loss ---------------------------
             VIS_NORM_LW=1.0,
             FULL_NORM_LW=1.0,
             # vertex norm-rt loss ---------------------------
-            VIS_NORM_RT_LW=1.0,
-            FULL_NORM_RT_LW=1.0,
+            VIS_NORM_RT_LW=10.0,
+            FULL_NORM_RT_LW=10.0,
             # LAB space loss ------------------
             LAB_NO_L=True,
             LAB_LW=0.,

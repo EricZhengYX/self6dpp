@@ -85,7 +85,7 @@ DATASETS = dict(
     TRAIN=("lmo_NoBopTest_ape_train",),  # real data
     TRAIN2=("lmo_pbr_ape_train",),  # synthetic data
     TRAIN2_RATIO=0.0,
-    TEST=("lmo_ape_bop_test",),
+    TEST=("lmo_can_bop_test",),
     # for self-supervised training
     DET_FILES_TRAIN=(
         "datasets/BOP_DATASETS/lmo/test/init_poses/resnest50d_online_AugCosyAAEGray_mlBCE_DoubleMask_lmo_pbr_100e_so_withYolov4PbrBbox_wDeepimPbrPose_lmo_NoBopTest_train.json",
@@ -120,7 +120,7 @@ MODEL = dict(
         UPDATE_FREQ=10,  # update the mean teacher every n epochs
     ),
     POSE_NET=dict(
-        NAME="GDRN_double_mask_double_vf",  # used module file name  GDRN_double_mask_double_vf
+        NAME="GDRN_double_mask",  # used module file name  GDRN_double_mask_double_vf
         # NOTE: for self-supervised training phase, use offline labels should be more accurate
         XYZ_ONLINE=False,  # rendering xyz online
         XYZ_BP=True,  # calculate xyz from depth by backprojection
@@ -144,7 +144,7 @@ MODEL = dict(
         GEO_HEAD=dict(
             FREEZE=False,
             INIT_CFG=dict(
-                type="TopDownDoubleMaskDoubleVFXyzRegionHead",  # TopDownDoubleMaskDoubleVFXyzRegionHead TopDownDoubleMaskXyzRegionHead
+                type="TopDownDoubleMaskXyzRegionHead",  # TopDownDoubleMaskDoubleVFXyzRegionHead TopDownDoubleMaskXyzRegionHead
                 in_dim=2048,  # this is num out channels of backbone conv feature
             ),
             NUM_REGIONS=64,
@@ -155,7 +155,7 @@ MODEL = dict(
             INIT_CFG=dict(
                 norm="GN",
                 act="gelu",
-                type="ConvPnPNetAll",  # ConvPnPNet ConvPnPNetAll
+                type="ConvPnPNet",  # ConvPnPNet ConvPnPNetAll
             ),
             REGION_ATTENTION=True,
             WITH_2D_COORD=True,
