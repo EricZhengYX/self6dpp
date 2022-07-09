@@ -1,0 +1,8 @@
+_base_ = ["base.py"]
+
+OUTPUT_DIR = "output/gdrn/lm_pbr/new_cfg/glue"
+
+DATASETS = dict(
+    TRAIN=("lm_pbr_glue_train",),
+    TEST=("lmo_glue_bop_test", "lm_real_glue_test"),
+)

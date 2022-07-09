@@ -1,6 +1,6 @@
 _base_ = ["../../_base_/gdrn_base.py", "../../_base_/renderer_base.py"]
 
-OUTPUT_DIR = "output/gdrn/lm_pbr/new_cfg/holepuncher"
+OUTPUT_DIR = "output/gdrn/lm_pbr/new_cfg/base"
 INPUT = dict(
     DZI_PAD_SCALE=1.5,
     TRUNCATE_FG=False,
@@ -51,13 +51,13 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=2,  # 24
-    TOTAL_EPOCHS=160,
+    IMS_PER_BATCH=16,  # 24
+    TOTAL_EPOCHS=50,
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
     # REL_STEPS=(0.3125, 0.625, 0.9375),
-    OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-4, weight_decay=0),
+    OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=1e-5, weight_decay=0),
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
     WARMUP_ITERS=1000,
