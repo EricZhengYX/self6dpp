@@ -187,6 +187,8 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         self.model_points = {}
         self.extents = {}
         self.sym_infos = {}
+        # ------------------------
+        self.renderer = None
         # ----------------------------------------------------
         self.flatten = flatten
         self._lst = flat_dataset_dicts(lst) if flatten else lst
@@ -489,13 +491,35 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
         # extent
         roi_extent = self._get_extents(dataset_name)[roi_cls]
 
-        # load xyz =======================================================
-        xyz_info = mmcv.load(inst_infos["xyz_path"])
-        x1, y1, x2, y2 = xyz_info["xyxy"]
-        # float16 does not affect performance (classification/regresion)
-        xyz_crop = xyz_info["xyz_crop"]
-        xyz = np.zeros((im_H, im_W, 3), dtype=np.float32)
-        xyz[y1 : y2 + 1, x1 : x2 + 1, :] = xyz_crop
+        # pose
+        pose = inst_infos["pose"]
+
+        # xyz / full-mask
+        if cfg.MODEL.POSE_NET.XYZ_ONLINE:
+            assert self.renderer is not None, "XYZ is rendered online, a renderer need to be assigned."
+            xyz = self.render_xyz(pose=pose, im_H=im_H, im_W=im_W, roi_cls=roi_cls, K=K)
+            # full mask
+            mask_obj = (
+                ((xyz[:, :, 0] != 0) | (xyz[:, :, 1] != 0) | (xyz[:, :, 2] != 0))
+                .astype(np.bool)
+                .astype(np.float32)
+            )
+            bbox_idx = np.where(mask_obj != 0)
+            y1, y2, x1, x2 = np.min(bbox_idx[0]), np.max(bbox_idx[0]), np.min(bbox_idx[1]), np.max(bbox_idx[1])
+        else:
+            # load xyz =======================================================
+            xyz_info = mmcv.load(inst_infos["xyz_path"])
+            x1, y1, x2, y2 = xyz_info["xyxy"]
+            # float16 does not affect performance (classification/regresion)
+            xyz_crop = xyz_info["xyz_crop"]
+            xyz = np.zeros((im_H, im_W, 3), dtype=np.float32)
+            xyz[y1 : y2 + 1, x1 : x2 + 1, :] = xyz_crop
+            # full mask
+            mask_obj = (
+                ((xyz[:, :, 0] != 0) | (xyz[:, :, 1] != 0) | (xyz[:, :, 2] != 0))
+                .astype(np.bool)
+                .astype(np.float32)
+            )
 
         # load norm =======================================================
         if self.with_norm:
@@ -517,12 +541,6 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
                 * norm_mask
             )
 
-        # NOTE: full mask
-        mask_obj = (
-            ((xyz[:, :, 0] != 0) | (xyz[:, :, 1] != 0) | (xyz[:, :, 2] != 0))
-            .astype(np.bool)
-            .astype(np.float32)
-        )
         if cfg.INPUT.SMOOTH_XYZ:
             xyz = self.smooth_xyz(xyz)
 
@@ -700,7 +718,6 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
             # dataset_dict["roi_xyz"] = torch.as_tensor(roi_xyz.astype("float32")).contiguous()
 
         # pose targets ----------------------------------------------------------------------
-        pose = inst_infos["pose"]
         ego_rot = torch.as_tensor(pose[:3, :3].astype("float32"))
         trans = torch.as_tensor(inst_infos["trans"].astype("float32"))
 
@@ -1053,6 +1070,43 @@ class GDRN_DatasetFromList(Base_DatasetFromList):
     def get_current_output_mode(self):
         return self.__output_mode
 
+    def assign_renderer(self, renderer):
+        self.renderer = renderer
+
+    def render_xyz(self, pose, im_H, im_W, roi_cls, K):
+        ego_rot = pose[:3, :3]
+        trans = pose[:3, 3]
+        self.renderer.height = im_H
+        self.renderer.width = im_W
+        # rendering online xyz -----------------------------
+        if self.cfg.MODEL.POSE_NET.XYZ_BP:
+            pc_cam_tensor = torch.cuda.FloatTensor(im_H, im_W, 4).detach()
+            depth = torch.empty(im_H, im_W, dtype=torch.float32, device="cuda")
+            self.renderer.render(
+                [int(roi_cls)],
+                [pose],
+                K=K,
+                pc_cam_tensor=pc_cam_tensor,
+            )
+            depth.copy_(pc_cam_tensor[:, :, 2], non_blocking=True)
+            xyz = misc.calc_xyz_bp_fast(
+                depth.cpu().numpy(),
+                ego_rot,
+                trans,
+                K,
+            )
+        else:  # directly rendering xyz
+            pc_obj_tensor = torch.cuda.FloatTensor(im_H, im_W, 4).detach()
+            xyz = torch.empty(im_H, im_W, 3, dtype=torch.float32, device="cuda")
+            self.renderer.render(
+                [int(roi_cls)],
+                [pose],
+                K=K,
+                pc_obj_tensor=pc_obj_tensor,
+            )
+            xyz.copy_(pc_obj_tensor[:, :, :3], non_blocking=True)
+        return xyz
+
     """
     def __switch_output_mode(self):
         if self.__output_mode == 'fix':
@@ -1121,6 +1175,7 @@ def build_gdrn_train_loader(cfg, dataset_names):
         dataset_dicts, visib_thr=cfg.DATALOADER.FILTER_VISIB_THR
     )
 
+    '''
     if cfg.MODEL.POSE_NET.XYZ_ONLINE:
         dataset = GDRN_Online_DatasetFromList(
             cfg, split="train", lst=dataset_dicts, copy=False
@@ -1129,6 +1184,10 @@ def build_gdrn_train_loader(cfg, dataset_names):
         dataset = GDRN_DatasetFromList(
             cfg, split="train", lst=dataset_dicts, copy=False
         )
+    '''
+    dataset = GDRN_DatasetFromList(
+        cfg, split="train", lst=dataset_dicts, copy=False
+    )
 
     sampler_name = cfg.DATALOADER.SAMPLER_TRAIN
     logger = logging.getLogger(__name__)

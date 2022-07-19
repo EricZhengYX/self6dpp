@@ -178,7 +178,6 @@ def main(args):
         else:
             raise ValueError("Unknown differentiable renderer type")
 
-    '''
     # get renderer ----------------------
     if (
         args.eval_only
@@ -197,7 +196,6 @@ def main(args):
             )
         else:
             renderer = None
-    '''
 
     logger.info(f"Used GDRN module name: {cfg.MODEL.POSE_NET.NAME}")
     model_args = {
@@ -238,7 +236,7 @@ def main(args):
             find_unused_parameters=True,
         )
 
-    do_train(cfg, args, model, optimizer, renderer=None, resume=args.resume)
+    do_train(cfg, args, model, optimizer, renderer=renderer, resume=args.resume)
     return do_test(cfg, model)
 
 

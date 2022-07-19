@@ -8,7 +8,7 @@ DELETE_OLD = True
 
 def build_content(cls_name):
     content = \
-'''_base_ = ["base.py"]
+'''_base_ = ["LM_base.py"]
 
 OUTPUT_DIR = "output/gdrn/lm_pbr/new_cfg/{}"
 

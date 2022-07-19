@@ -44,6 +44,7 @@ from core.utils.data_utils import denormalize_image
 from core.gdrn_modeling.datasets.data_loader import (
     build_gdrn_train_loader,
     build_gdrn_test_loader,
+    GDRN_DatasetFromList,
 )
 
 from .engine_utils import batch_data, get_out_coor, get_out_mask
@@ -211,6 +212,7 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
     # load data ===================================
     train_dset_names = cfg.DATASETS.TRAIN
     data_loader = build_gdrn_train_loader(cfg, train_dset_names)
+    data_loader.dataset.assign_renderer(renderer)
     data_loader_iter = iter(data_loader)
 
     # load 2nd train dataloader if needed
@@ -218,6 +220,7 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
     train_2_ratio = cfg.DATASETS.get("TRAIN2_RATIO", 0.0)
     if train_2_ratio > 0.0 and len(train_2_dset_names) > 0:
         data_loader_2 = build_gdrn_train_loader(cfg, train_2_dset_names)
+        data_loader_2.dataset.assign_renderer(renderer)
         data_loader_2_iter = iter(data_loader_2)
     else:
         data_loader_2 = None
@@ -453,7 +456,7 @@ def do_train(cfg, args, model, optimizer, renderer=None, resume=False):
                 loss_val = float(value)
                 tbx_writer.add_scalar(loss_name, loss_val, iteration)
             # recording grad-norm
-            tbx_writer.add_scalar("Grad/total_norm", total_norm.item(), iteration)
+            tbx_writer.add_scalar("Grad/total_norm", float(total_norm), iteration)
 
             # periodically do/save evaluations
             if (

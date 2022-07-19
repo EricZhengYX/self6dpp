@@ -8,7 +8,7 @@ INPUT = dict(
     COLOR_AUG_PROB=0.8,
     COLOR_AUG_TYPE="iaa_custom",
     COLOR_AUG_BG_REPLACE="datasets/VOCdevkit/VOC2012/JPEGImages",
-    COLOR_AUG_CACHED_BG=True,
+    COLOR_AUG_CACHED_BG=False,
     COLOR_AUG_CODE=(
         "Sequential(["
         # Sometimes(0.5, PerspectiveTransform(0.05)),
@@ -87,7 +87,7 @@ MODEL = dict(
     POSE_NET=dict(
         USE_MTL=False,
         NAME="GDRN_MaskNormVF",  # GDRN_double_mask_double_vf, GDRN_double_mask, GDRN_double_mask_double_vf
-        XYZ_ONLINE=False,
+        XYZ_ONLINE=True,
         BACKBONE=dict(
             FREEZE=False,
             PRETRAINED="timm",

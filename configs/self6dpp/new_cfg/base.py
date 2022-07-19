@@ -51,7 +51,7 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=6,  # 6, maybe need to be < 24
+    IMS_PER_BATCH=2,  # 6, maybe need to be < 24
     TOTAL_EPOCHS=100,
     CHECKPOINT_PERIOD=30,
     LR_SCHEDULER_NAME="flat_and_anneal",
@@ -225,7 +225,7 @@ MODEL = dict(
             XYZ_INIT_PRED_LW=1.0,
             # point matching loss using pseudo pose ---------------------------
             SELF_PM_CFG=dict(
-                loss_weight=100.0,  # NOTE: >0 to enable this loss
+                loss_weight=10.0,  # NOTE: >0 to enable this loss
             ),
             # trans loss
             TRANS_LW=10.0,

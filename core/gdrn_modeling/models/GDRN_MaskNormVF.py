@@ -1157,10 +1157,10 @@ plt.show()
 
         b = Rs.shape[0]
         _dummy = torch.as_tensor([[-0.5, -0.5, 0.5, 0.5]], device=roi_centers.device).repeat((b, 1))
-        rois = torch.hstack((roi_centers, roi_centers)) + torch.diag(roi_scales) @ _dummy
-        rois = torch.hstack((
+        rois = torch.cat((roi_centers, roi_centers), dim=1) + torch.diag(roi_scales) @ _dummy
+        rois = torch.cat((
             torch.linspace(0, b - 1, b, device=roi_centers.device).unsqueeze(-1), rois
-        ))
+        ), dim=1)
         return batch_crop_resize(norm_img, rois, out_size[0], out_size[1])
 
 

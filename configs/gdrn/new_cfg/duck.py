@@ -1,4 +1,4 @@
-_base_ = ["base.py"]
+_base_ = ["LM_base.py"]
 
 OUTPUT_DIR = "output/gdrn/lm_pbr/new_cfg/duck"
 

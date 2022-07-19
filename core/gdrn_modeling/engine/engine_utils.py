@@ -15,9 +15,11 @@ def batch_data(cfg, data, renderer=None, device="cuda", phase="train"):
     if phase != "train":
         return batch_data_test(cfg, data, device=device)
 
+    '''
     if cfg.MODEL.POSE_NET.XYZ_ONLINE:
         assert renderer is not None, "renderer must be provided for online rendering"
         return batch_data_train_online(cfg, data, renderer=renderer, device=device)
+    '''
 
     # batch training data
     batch = {}
@@ -272,8 +274,8 @@ def get_renderer(cfg, data_ref, obj_names, gpu_id=None):
         znear=data_ref.zNear,
         zfar=data_ref.zFar,
         K=data_ref.camera_matrix,  # may override later
-        height=cfg.MODEL.POSE_NET.OUTPUT_RES,
-        width=cfg.MODEL.POSE_NET.OUTPUT_RES,
+        # height=cfg.MODEL.POSE_NET.OUTPUT_RES,
+        # width=cfg.MODEL.POSE_NET.OUTPUT_RES,
         gpu_id=gpu_id,
         use_cache=True,
     )
