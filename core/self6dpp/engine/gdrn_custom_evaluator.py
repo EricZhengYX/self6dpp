@@ -676,8 +676,10 @@ class GDRN_EvaluatorCustom(DatasetEvaluator):
             obj_preds = self._predictions[obj_name]
             for file_name, gt_anno in obj_gts.items():
                 if file_name not in obj_preds:  # no pred found
+                    '''
                     for metric_name in metric_names:
                         recalls[obj_name][metric_name].append(0.0)
+                    '''
                     continue
                 # compute each metric
                 R_pred = obj_preds[file_name]["R"]

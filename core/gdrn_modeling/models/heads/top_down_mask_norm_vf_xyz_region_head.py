@@ -312,6 +312,6 @@ def _post_process_norm(raw_norm: torch.Tensor):
     @return: same sized
     """
     b, _, w, h = raw_norm.shape
-    norm = raw_norm / (torch.norm(raw_norm, dim=2, keepdim=True) + 1e-4)
+    norm = raw_norm / (torch.norm(raw_norm, dim=1, keepdim=True) + 1e-4)
 
     return norm  # b*3*w*h
