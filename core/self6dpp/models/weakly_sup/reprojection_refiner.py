@@ -133,8 +133,16 @@ class RepjRefiner(nn.Module):
 
         # best view point
         full_mask_vec = inf_full_masks.view(batch_size, -1).cpu().detach()
+        full_mask_vec_hard = full_mask_vec > 0.5
         vis_mask_vec = inf_vis_masks.view(batch_size, -1).cpu().detach()
-        sim_scores = F.cosine_similarity(torch.sigmoid(full_mask_vec), torch.sigmoid(vis_mask_vec)).numpy()
+        sim_scores = []
+        for i in range(batch_size):
+            _fvec = full_mask_vec[i]
+            _fvech = full_mask_vec_hard[i]
+            _vvec = vis_mask_vec[i]
+            sim_scores.append(
+                F.cosine_similarity(_fvec[_fvech], _vvec[_fvech], dim=0).numpy()
+            )
         best_inf_idx = np.argmax(sim_scores)
 
         record_dict["best idx"] = int(best_inf_idx)

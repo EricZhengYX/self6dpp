@@ -195,6 +195,8 @@ class LM_Dataset(object):
                     mask_full = mask_full.astype("bool")
                     mask_full_rle = binary_mask_to_rle(mask_full, compressed=True)
 
+                    visib_fract = gt_info_dict[str_im_id][anno_i].get("visib_fract", 1.0)
+
                     inst = {
                         "category_id": cur_label,  # 0-based label
                         "bbox": bbox_visib,  # TODO: load both bbox_obj and bbox_visib
@@ -204,6 +206,7 @@ class LM_Dataset(object):
                         "trans": t,
                         "centroid_2d": proj,  # absolute (cx, cy)
                         "segmentation": mask_rle,
+                        "visib_fract": visib_fract,
                         "mask_full": mask_full_rle,
                     }
 

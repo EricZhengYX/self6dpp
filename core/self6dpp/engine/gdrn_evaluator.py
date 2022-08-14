@@ -14,6 +14,7 @@ import mmcv
 import numpy as np
 import ref
 import torch
+import torch.nn.functional as F
 # from torch.cuda.amp import autocast
 from transforms3d.quaternions import quat2mat
 
@@ -583,6 +584,10 @@ def gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=False
     start_time = time.perf_counter()
     total_compute_time = 0
     total_process_time = 0
+
+    # record
+    record_dict = {}
+
     with inference_context(model), torch.no_grad():
         for idx, inputs in enumerate(data_loader):
             if idx == num_warmup:
@@ -622,6 +627,21 @@ def gdrn_inference_on_dataset(cfg, model, data_loader, evaluator, amp_test=False
                 resize_ratios=batch["resize_ratio"],
                 forward_mode='pose',
             )
+            '''
+            # record
+            full_mask_vec = out_dict['full_mask_prob'].view(1, -1).cpu().detach()
+            vis_mask_vec = out_dict['vis_mask_prob'].view(1, -1).cpu().detach()
+            sim_scores = F.cosine_similarity(torch.sigmoid(full_mask_vec), torch.sigmoid(vis_mask_vec)).numpy()
+            record_dict[idx] = {
+                "file_names": inputs[0]['file_name'][0],
+                "visib_fract": inputs[0]['annotations'][0]['visib_fract'],
+                "roi_img": batch["roi_img"][0],
+                "full_mask": out_dict['full_mask_prob'][0, 0],
+                "vis_mask": out_dict['vis_mask_prob'][0, 0],
+                "sim_scores": sim_scores[0],
+            }
+            '''
+
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             cur_compute_time = time.perf_counter() - start_compute_time

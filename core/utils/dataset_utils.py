@@ -186,6 +186,17 @@ def load_detections_into_dataset(
             ]
             annotations.extend(sel_annos)
         # NOTE: maybe [], no detections
+        '''
+        # load visib_fract
+        visib_fract_dict = {
+            anno["category_id"]: anno["visib_fract"]
+            for anno in record["annotations"]
+        }
+        for anno in annotations:
+            category_id = anno['category_id']
+            anno["visib_fract"] = visib_fract_dict[category_id]
+        '''
+
         record["annotations"] = annotations
         new_dataset_dicts.append(record)
 
