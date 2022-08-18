@@ -141,12 +141,12 @@ class RepjRefiner(nn.Module):
             _fvech = full_mask_vec_hard[i]
             _vvec = vis_mask_vec[i]
             sim_scores.append(
-                F.cosine_similarity(_fvec[_fvech], _vvec[_fvech], dim=0).numpy()
+                F.cosine_similarity(_fvec[_fvech], _vvec[_fvech], dim=0).item()
             )
         best_inf_idx = np.argmax(sim_scores)
 
         record_dict["best idx"] = int(best_inf_idx)
-        record_dict["sim_scores"] = sim_scores.tolist()
+        record_dict["sim_scores"] = sim_scores
 
         # ==================== calculate & concat repj and inf paras ====================
         # region Rep&Inf-paras
